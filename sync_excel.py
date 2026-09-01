@@ -9,7 +9,6 @@ from decimal import Decimal
 from google.oauth2.service_account import Credentials
 from shapely.geometry import shape, Point
 
-#KONFIGURASI
 DROPBOX_URL_PLANTING = "https://www.dropbox.com/scl/fi/yw173h2zgnm6h3965i2ra/Database-for-Planting.xlsx?rlkey=9tfv2u3u2f12w641iauyoqc6w&dl=1"
 DROPBOX_URL_FOLLOWUP = "https://www.dropbox.com/scl/fi/av13w2gl8etjfs6ai6e0i/Potential-Farmer-for-ARR.xlsx?rlkey=qeg53qzba72yguf2nt2d2ek1t&dl=1"
 
@@ -19,8 +18,8 @@ FIRE_SOURCE_SPREADSHEET_ID = "1x3XIpaWUaBnrVb7dITNfP8J206V-B91XKgLyQSLsyxg"
 FIRE_TARGET_SPREADSHEET_ID = "1ico29aeYmZFA3SXFHvg473D3H8WlJnJMVImtFQcRPm0"
 FIRE_FILTER_COLUMN = "data-survey-finding"
 FIRE_FILTER_VALUE = "Potential Fire Area"
-FIRE_COORD_COLUMN = "data-coordinate" 
-FIRE_LAST_COL = "Q"
+FIRE_COORD_COLUMN = "data-coordinate"  # format ODK: "lat lon altitude accuracy"
+FIRE_LAST_COL = "Q"  # tulisan dibatasi sampai kolom ini, kolom R+ diisi manual & tidak boleh ketimpa
 
 AGRO_GEOJSON_PATH = "data/lahangarapan_agro.geojson"
 AGRO_GEOJSON_PROPERTY = "Penggarap_"
@@ -42,7 +41,7 @@ SUMMARY_HEADER = [
     "PupukPadat", "PupukCair", "tanggal_bpo", "insentifMTL", "tanggal_mtl",
     "dusun", "luas_agro", "luas_temb", "ENL", "ENP",
 ]
-ARR_SUMMARY_DATE_COLS = ["J", "K", "AR"] 
+ARR_SUMMARY_DATE_COLS = ["J", "K", "AR"]  # Tgl_Partisipasi, Tgl_Realisasi, tanggal_mtl
 
 TARGET_CAPAIAN_MAPPING = {
     "Target Penanaman Tembawang (Ha)": "tembawang",
@@ -58,7 +57,7 @@ FOLLOW_UP_HEADER = [
     "pot_agr_reg", "pot_tbw", "pot_bpo", "pot_mtl",
     "tgl_update", "status", "keterangan",
 ]
-FOLLOW_UP_DATE_COLS = ["T"] 
+FOLLOW_UP_DATE_COLS = ["T"]  # tgl_update
 
 # Catatan (2026-07-17): di sheet "ARR" sumber ada 6 kolom baru (AA-AE, AL) yang
 # menggeser semua index >= 32 (AG dst.) sebesar +6. Index < 26 tidak berubah.
@@ -202,7 +201,7 @@ def process_arr(source_workbook, target_spreadsheet):
     data = [["" if c == "#REF!" else c for c in row] for row in data]
 
     if len(data) >= 2:
-        del data[1] 
+        del data[1]
 
     write_to_sheet(target_spreadsheet, "ARR", clean_rows(data))
 
@@ -239,7 +238,7 @@ def process_target_capaian(source_workbook, target_spreadsheet):
         return
 
     raw_data = [list(row) for row in source_workbook["Target Capaian"].iter_rows(values_only=True)]
-    data = raw_data[1:] 
+    data = raw_data[1:]  # skip judul besar
     if not data:
         return
 
@@ -250,6 +249,7 @@ def process_target_capaian(source_workbook, target_spreadsheet):
 
     write_to_sheet(target_spreadsheet, "TARGET_CAPAIAN", clean_rows(data))
 
+
 def process_cumulative_area(source_workbook, target_spreadsheet):
     sheet_name = "Cumulative Area"
     if sheet_name not in source_workbook.sheetnames:
@@ -257,9 +257,10 @@ def process_cumulative_area(source_workbook, target_spreadsheet):
 
     raw_data = [list(row) for row in source_workbook[sheet_name].iter_rows(values_only=True)]
 
-    data = raw_data[3:]
+    data = [row[1:] for row in raw_data[3:]]
 
     write_to_sheet(target_spreadsheet, "Planting Cumulative Area", clean_rows(data))
+
 
 
 def process_follow_up_petani(source_workbook, target_spreadsheet):
@@ -290,7 +291,7 @@ def process_fire_area(gc):
         return
     filter_idx = header.index(FIRE_FILTER_COLUMN)
 
-    coord_idx = header.index(FIRE_COORD_COLUMN) if FIRE_COORD_COLUMN in header else 2  
+    coord_idx = header.index(FIRE_COORD_COLUMN) if FIRE_COORD_COLUMN in header else 2  # fallback kolom C
 
     rows = [row for row in all_values[1:] if safe_get(row, filter_idx) == FIRE_FILTER_VALUE]
 
