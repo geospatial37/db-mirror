@@ -9,19 +9,18 @@ from decimal import Decimal
 from google.oauth2.service_account import Credentials
 from shapely.geometry import shape, Point
 
-# ==== KONFIGURASI ====
+#KONFIGURASI
 DROPBOX_URL_PLANTING = "https://www.dropbox.com/scl/fi/yw173h2zgnm6h3965i2ra/Database-for-Planting.xlsx?rlkey=9tfv2u3u2f12w641iauyoqc6w&dl=1"
 DROPBOX_URL_FOLLOWUP = "https://www.dropbox.com/scl/fi/av13w2gl8etjfs6ai6e0i/Potential-Farmer-for-ARR.xlsx?rlkey=qeg53qzba72yguf2nt2d2ek1t&dl=1"
 
 TARGET_SPREADSHEET_ID = "1-LHCIUy1iD154WczY4Da_-iRaILtvL0mOW4gRW6YQac"
 
-# --- Filter "Potential Fire Area" ---
 FIRE_SOURCE_SPREADSHEET_ID = "1x3XIpaWUaBnrVb7dITNfP8J206V-B91XKgLyQSLsyxg"
 FIRE_TARGET_SPREADSHEET_ID = "1ico29aeYmZFA3SXFHvg473D3H8WlJnJMVImtFQcRPm0"
 FIRE_FILTER_COLUMN = "data-survey-finding"
 FIRE_FILTER_VALUE = "Potential Fire Area"
-FIRE_COORD_COLUMN = "data-coordinate"  # format ODK: "lat lon altitude accuracy"
-FIRE_LAST_COL = "Q"  # tulisan dibatasi sampai kolom ini, kolom R+ diisi manual & tidak boleh ketimpa
+FIRE_COORD_COLUMN = "data-coordinate" 
+FIRE_LAST_COL = "Q"
 
 AGRO_GEOJSON_PATH = "data/lahangarapan_agro.geojson"
 AGRO_GEOJSON_PROPERTY = "Penggarap_"
@@ -43,7 +42,7 @@ SUMMARY_HEADER = [
     "PupukPadat", "PupukCair", "tanggal_bpo", "insentifMTL", "tanggal_mtl",
     "dusun", "luas_agro", "luas_temb", "ENL", "ENP",
 ]
-ARR_SUMMARY_DATE_COLS = ["J", "K", "AR"]  # Tgl_Partisipasi, Tgl_Realisasi, tanggal_mtl
+ARR_SUMMARY_DATE_COLS = ["J", "K", "AR"] 
 
 TARGET_CAPAIAN_MAPPING = {
     "Target Penanaman Tembawang (Ha)": "tembawang",
@@ -59,14 +58,10 @@ FOLLOW_UP_HEADER = [
     "pot_agr_reg", "pot_tbw", "pot_bpo", "pot_mtl",
     "tgl_update", "status", "keterangan",
 ]
-FOLLOW_UP_DATE_COLS = ["T"]  # tgl_update
+FOLLOW_UP_DATE_COLS = ["T"] 
 
 # Catatan (2026-07-17): di sheet "ARR" sumber ada 6 kolom baru (AA-AE, AL) yang
 # menggeser semua index >= 32 (AG dst.) sebesar +6. Index < 26 tidak berubah.
-
-# ---------------------------------------------------------------------------
-# Util
-# ---------------------------------------------------------------------------
 
 def clean_cell(value):
     """Konversi tipe data yang tidak bisa langsung dikirim ke Google Sheets API."""
@@ -109,8 +104,8 @@ def write_to_sheet(target_spreadsheet, sheet_name, data, date_cols=None):
                 sheet.format(f"{col}2:{col}{len(data)}", {
                     "numberFormat": {"type": "DATE", "pattern": "m/d/yyyy"}
                 })
-            except Exception as e:
-                print(f"⚠️  Gagal menerapkan format tanggal di {col}: {e}")
+            except Exception:
+                pass
 
     return sheet
 
@@ -142,8 +137,8 @@ def load_geojson_features(path):
             continue
         try:
             features.append((shape(geom), feat.get("properties", {})))
-        except Exception as e:
-            print(f"⚠️  Lewati fitur tidak valid di {path}: {e}")
+        except Exception:
+            continue
     return features
 
 
@@ -152,7 +147,7 @@ def parse_point(coord_str):
     if not coord_str:
         return None
     text = str(coord_str).strip()
-    # Dukung juga kalau suatu saat formatnya dipisah spasi, bukan cuma koma
+
     parts = text.split(",") if "," in text else text.split()
     if len(parts) < 2:
         return None
@@ -178,17 +173,11 @@ def find_overlay_value(point, features, property_name):
 def download_workbook(url, label):
     response = requests.get(url)
     response.raise_for_status()
-    print(f"Unduh '{label}': OK ({len(response.content)} bytes)")
     return openpyxl.load_workbook(io.BytesIO(response.content), data_only=True)
 
 
-# ---------------------------------------------------------------------------
-# Sheet ARR (dengan pembersihan header + remap ke ARR_SUMMARY)
-# ---------------------------------------------------------------------------
-
 def process_arr(source_workbook, target_spreadsheet):
     if "ARR" not in source_workbook.sheetnames:
-        print("⚠️  Sheet 'ARR' tidak ditemukan, dilewati.")
         return
 
     raw_data = [list(row) for row in source_workbook["ARR"].iter_rows(values_only=True)]
@@ -213,10 +202,9 @@ def process_arr(source_workbook, target_spreadsheet):
     data = [["" if c == "#REF!" else c for c in row] for row in data]
 
     if len(data) >= 2:
-        del data[1]  # baris kedua adalah baris kosong/sub-header sisa
+        del data[1] 
 
     write_to_sheet(target_spreadsheet, "ARR", clean_rows(data))
-    print(f"✅ 'ARR': {len(data)} baris ditulis.")
 
     summary = [SUMMARY_HEADER]
     for row in data[1:]:
@@ -245,22 +233,14 @@ def process_arr(source_workbook, target_spreadsheet):
         summary.append(clean_rows([summary_row])[0])
 
     write_to_sheet(target_spreadsheet, "ARR_SUMMARY", summary, ARR_SUMMARY_DATE_COLS)
-    print(f"✅ 'ARR_SUMMARY': {len(summary) - 1} baris ditulis.")
-
-
-# ---------------------------------------------------------------------------
-# Sheet Target Capaian -> TARGET_CAPAIAN
-# ---------------------------------------------------------------------------
 
 def process_target_capaian(source_workbook, target_spreadsheet):
     if "Target Capaian" not in source_workbook.sheetnames:
-        print("⚠️  Sheet 'Target Capaian' tidak ditemukan, dilewati.")
         return
 
     raw_data = [list(row) for row in source_workbook["Target Capaian"].iter_rows(values_only=True)]
-    data = raw_data[1:]  # skip judul besar
+    data = raw_data[1:] 
     if not data:
-        print("⚠️  Sheet 'Target Capaian' kosong setelah baris judul.")
         return
 
     for row in data[1:]:
@@ -269,16 +249,21 @@ def process_target_capaian(source_workbook, target_spreadsheet):
             row[0] = TARGET_CAPAIAN_MAPPING[uraian]
 
     write_to_sheet(target_spreadsheet, "TARGET_CAPAIAN", clean_rows(data))
-    print(f"✅ 'TARGET_CAPAIAN': {len(data)} baris ditulis.")
 
+def process_cumulative_area(source_workbook, target_spreadsheet):
+    sheet_name = "Cumulative Area"
+    if sheet_name not in source_workbook.sheetnames:
+        return
 
-# ---------------------------------------------------------------------------
-# Sheet Follow Up Petani -> FOLLOW_UP_PETANI
-# ---------------------------------------------------------------------------
+    raw_data = [list(row) for row in source_workbook[sheet_name].iter_rows(values_only=True)]
+
+    data = raw_data[3:]
+
+    write_to_sheet(target_spreadsheet, "Planting Cumulative Area", clean_rows(data))
+
 
 def process_follow_up_petani(source_workbook, target_spreadsheet):
     if "Follow Up Petani" not in source_workbook.sheetnames:
-        print("⚠️  Sheet 'Follow Up Petani' tidak ditemukan, dilewati.")
         return
 
     data = [list(row) for row in source_workbook["Follow Up Petani"].iter_rows(values_only=True)]
@@ -290,12 +275,7 @@ def process_follow_up_petani(source_workbook, target_spreadsheet):
         result.append([safe_get(row, i) for i in range(1, 23)])
 
     write_to_sheet(target_spreadsheet, "FOLLOW_UP_PETANI", clean_rows(result), FOLLOW_UP_DATE_COLS)
-    print(f"✅ 'FOLLOW_UP_PETANI': {len(result) - 1} baris ditulis.")
 
-
-# ---------------------------------------------------------------------------
-# Filter "Potential Fire Area" -> Sheet1 (spreadsheet target terpisah)
-# ---------------------------------------------------------------------------
 
 def process_fire_area(gc):
     source_ss = gc.open_by_key(FIRE_SOURCE_SPREADSHEET_ID)
@@ -303,23 +283,19 @@ def process_fire_area(gc):
     all_values = source_sheet.get_all_values()
 
     if not all_values:
-        print("⚠️  Sheet sumber Potential Fire Area kosong, dilewati.")
         return
 
     header = all_values[0]
     if FIRE_FILTER_COLUMN not in header:
-        print(f"⚠️  Kolom '{FIRE_FILTER_COLUMN}' tidak ditemukan di sheet sumber, dilewati.")
         return
     filter_idx = header.index(FIRE_FILTER_COLUMN)
 
-    coord_idx = header.index(FIRE_COORD_COLUMN) if FIRE_COORD_COLUMN in header else 2  # fallback kolom C
+    coord_idx = header.index(FIRE_COORD_COLUMN) if FIRE_COORD_COLUMN in header else 2  
 
     rows = [row for row in all_values[1:] if safe_get(row, filter_idx) == FIRE_FILTER_VALUE]
 
-    # Overlay dengan geojson lahan garapan & pemilik lahan
     agro_features = load_geojson_features(AGRO_GEOJSON_PATH)
     owner_features = load_geojson_features(OWNER_GEOJSON_PATH)
-    print(f"Overlay: {len(agro_features)} polygon agro, {len(owner_features)} polygon pemilik.")
 
     result_rows = []
     parsed_count = 0
@@ -337,20 +313,13 @@ def process_fire_area(gc):
             owner_match_count += 1
         result_rows.append(list(row) + [agro_value, owner_value])
 
-    print(f"Overlay: {parsed_count}/{len(rows)} titik berhasil di-parse, "
-          f"{agro_match_count} match agro, {owner_match_count} match pemilik.")
 
     final_header = header + [AGRO_OUTPUT_COLUMN, OWNER_OUTPUT_COLUMN]
     filtered = [final_header] + result_rows
 
     target_ss = gc.open_by_key(FIRE_TARGET_SPREADSHEET_ID)
     write_range_only(target_ss, "Sheet1", filtered, FIRE_LAST_COL)
-    print(f"✅ 'Potential Fire Area': {len(filtered) - 1} baris ditulis ke Sheet1 (sampai kolom {FIRE_LAST_COL}).")
 
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
 
 def main():
     creds_dict = json.loads(os.environ["GOOGLE_CREDENTIALS"])
@@ -365,13 +334,12 @@ def main():
     planting_wb = download_workbook(DROPBOX_URL_PLANTING, "Database-for-Planting")
     process_arr(planting_wb, target_spreadsheet)
     process_target_capaian(planting_wb, target_spreadsheet)
+    process_cumulative_area(planting_wb, target_spreadsheet)
 
     followup_wb = download_workbook(DROPBOX_URL_FOLLOWUP, "Potential-Farmer-for-ARR")
     process_follow_up_petani(followup_wb, target_spreadsheet)
 
     process_fire_area(gc)
-
-    print(f"\nSelesai. Spreadsheet: {target_spreadsheet.url}")
 
 
 if __name__ == "__main__":
