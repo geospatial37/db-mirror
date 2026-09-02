@@ -7,27 +7,18 @@ import gspread
 from datetime import datetime, date, time
 from decimal import Decimal
 from google.oauth2.service_account import Credentials
-from shapely.geometry import shape, Point
 
+#KONFIGURASI
 DROPBOX_URL_PLANTING = "https://www.dropbox.com/scl/fi/yw173h2zgnm6h3965i2ra/Database-for-Planting.xlsx?rlkey=9tfv2u3u2f12w641iauyoqc6w&dl=1"
 DROPBOX_URL_FOLLOWUP = "https://www.dropbox.com/scl/fi/av13w2gl8etjfs6ai6e0i/Potential-Farmer-for-ARR.xlsx?rlkey=qeg53qzba72yguf2nt2d2ek1t&dl=1"
+DROPBOX_URL_CT_COMPILE = "https://www.dropbox.com/scl/fi/bg82woa41npj9sfc6l58h/CT-Compile.xlsx?rlkey=yu29wz7rjpgvzh7vttahexc0n&dl=1"
+DROPBOX_URL_BT_COMPILE = "https://www.dropbox.com/scl/fi/5au2sa502w64h32in2azi/BT-Compile.xlsx?rlkey=8do0u62sevgy3vcovrvd4ptox&dl=1"
+DROPBOX_URL_COMDEV = "https://www.dropbox.com/scl/fi/bkkqvxk9nnqkxr84qry5f/ComDev-Database_Update_20260818.xlsx?rlkey=t5691lpd5x0pax5bazvf9n8st&dl=1"
 
 TARGET_SPREADSHEET_ID = "1-LHCIUy1iD154WczY4Da_-iRaILtvL0mOW4gRW6YQac"
-
-FIRE_SOURCE_SPREADSHEET_ID = "1x3XIpaWUaBnrVb7dITNfP8J206V-B91XKgLyQSLsyxg"
-FIRE_TARGET_SPREADSHEET_ID = "1ico29aeYmZFA3SXFHvg473D3H8WlJnJMVImtFQcRPm0"
-FIRE_FILTER_COLUMN = "data-survey-finding"
-FIRE_FILTER_VALUE = "Potential Fire Area"
-FIRE_COORD_COLUMN = "data-coordinate"  # format ODK: "lat lon altitude accuracy"
-FIRE_LAST_COL = "Q"  # tulisan dibatasi sampai kolom ini, kolom R+ diisi manual & tidak boleh ketimpa
-
-AGRO_GEOJSON_PATH = "data/lahangarapan_agro.geojson"
-AGRO_GEOJSON_PROPERTY = "Penggarap_"
-AGRO_OUTPUT_COLUMN = "Penggarap (Agro)"
-
-OWNER_GEOJSON_PATH = "data/PemilikLahan.json"
-OWNER_GEOJSON_PROPERTY = "Owner"
-OWNER_OUTPUT_COLUMN = "Penggarap (Survei)"
+CAMERATRAP_SPREADSHEET_ID = "1Zkm82R3ct1HY1ov_HL35M9qEJudKPCkf0wGSNGxwdQ4"
+BT_SPREADSHEET_ID = "1NJPa0nnULKqlihlkZo7J9M6gALi71LZ2_cs-0qz8SuI"
+COMDEV_SPREADSHEET_ID = "1GB64g8bGV_IFjXcpRL7bu4lj9FtgRLKcUXqpNMzg50c"
 
 SUMMARY_HEADER = [
     "No", "Grid", "KTH", "Luas", "Tipe", "Petani", "Jenis Kelamin", "Desa",
@@ -59,9 +50,6 @@ FOLLOW_UP_HEADER = [
 ]
 FOLLOW_UP_DATE_COLS = ["T"]  # tgl_update
 
-# Catatan (2026-07-17): di sheet "ARR" sumber ada 6 kolom baru (AA-AE, AL) yang
-# menggeser semua index >= 32 (AG dst.) sebesar +6. Index < 26 tidak berubah.
-
 def clean_cell(value):
     """Konversi tipe data yang tidak bisa langsung dikirim ke Google Sheets API."""
     if value is None:
@@ -76,16 +64,13 @@ def clean_cell(value):
         return float(value)
     return value
 
-
 def clean_rows(rows):
     return [[clean_cell(c) for c in row] for row in rows]
-
 
 def safe_get(row, idx):
     if idx < 0 or idx >= len(row):
         return ""
     return row[idx]
-
 
 def write_to_sheet(target_spreadsheet, sheet_name, data, date_cols=None):
     try:
@@ -108,72 +93,10 @@ def write_to_sheet(target_spreadsheet, sheet_name, data, date_cols=None):
 
     return sheet
 
-
-def write_range_only(target_spreadsheet, sheet_name, data, last_col_letter):
-    """Tulis data mulai A1, tapi HANYA membersihkan & menimpa sampai kolom
-    `last_col_letter`. Kolom di sebelah kanannya (mis. diisi manual) tidak disentuh."""
-    try:
-        sheet = target_spreadsheet.worksheet(sheet_name)
-    except gspread.exceptions.WorksheetNotFound:
-        sheet = target_spreadsheet.add_worksheet(title=sheet_name, rows=100, cols=20)
-
-    max_row = max(sheet.row_count, len(data), 1)
-    sheet.batch_clear([f"A1:{last_col_letter}{max_row}"])
-    if data:
-        sheet.update(range_name="A1", values=data, value_input_option="USER_ENTERED")
-    return sheet
-
-
-def load_geojson_features(path):
-    """Baca file geojson dan kembalikan list of (shapely_geometry, properties)."""
-    with open(path, "r", encoding="utf-8") as f:
-        geojson_data = json.load(f)
-
-    features = []
-    for feat in geojson_data.get("features", []):
-        geom = feat.get("geometry")
-        if not geom:
-            continue
-        try:
-            features.append((shape(geom), feat.get("properties", {})))
-        except Exception:
-            continue
-    return features
-
-
-def parse_point(coord_str):
-    """Parse string koordinat format 'lat,lon' (dipisah koma) -> shapely Point(lon, lat)."""
-    if not coord_str:
-        return None
-    text = str(coord_str).strip()
-
-    parts = text.split(",") if "," in text else text.split()
-    if len(parts) < 2:
-        return None
-    try:
-        lat, lon = float(parts[0].strip()), float(parts[1].strip())
-        return Point(lon, lat)
-    except ValueError:
-        return None
-
-
-def find_overlay_value(point, features, property_name):
-    if point is None:
-        return ""
-    for polygon, props in features:
-        try:
-            if polygon.contains(point):
-                return props.get(property_name, "")
-        except Exception:
-            continue
-    return ""
-
-
 def download_workbook(url, label):
     response = requests.get(url)
     response.raise_for_status()
     return openpyxl.load_workbook(io.BytesIO(response.content), data_only=True)
-
 
 def process_arr(source_workbook, target_spreadsheet):
     if "ARR" not in source_workbook.sheetnames:
@@ -201,7 +124,7 @@ def process_arr(source_workbook, target_spreadsheet):
     data = [["" if c == "#REF!" else c for c in row] for row in data]
 
     if len(data) >= 2:
-        del data[1]
+        del data[1]  # baris kedua adalah baris kosong/sub-header sisa
 
     write_to_sheet(target_spreadsheet, "ARR", clean_rows(data))
 
@@ -249,7 +172,6 @@ def process_target_capaian(source_workbook, target_spreadsheet):
 
     write_to_sheet(target_spreadsheet, "TARGET_CAPAIAN", clean_rows(data))
 
-
 def process_cumulative_area(source_workbook, target_spreadsheet):
     sheet_name = "Cumulative Area"
     if sheet_name not in source_workbook.sheetnames:
@@ -261,7 +183,49 @@ def process_cumulative_area(source_workbook, target_spreadsheet):
 
     write_to_sheet(target_spreadsheet, "Planting Cumulative Area", clean_rows(data))
 
+def process_ct_compile(source_workbook, target_spreadsheet):
+    sheet_name = "CT Compile"
+    if sheet_name not in source_workbook.sheetnames:
+        raise ValueError(
+            f"Sheet '{sheet_name}' tidak ditemukan. "
+            f"Sheet yang tersedia: {source_workbook.sheetnames}"
+        )
 
+    data = [list(row) for row in source_workbook[sheet_name].iter_rows(values_only=True)]
+    if not data:
+        raise ValueError(f"Sheet '{sheet_name}' kosong, tidak ada data untuk ditulis.")
+
+    write_to_sheet(target_spreadsheet, "db-CT Compile", clean_rows(data))
+
+def process_bt_compile(source_workbook, target_spreadsheet):
+    sheet_name = "BT"
+    if sheet_name not in source_workbook.sheetnames:
+        raise ValueError(
+            f"Sheet '{sheet_name}' tidak ditemukan. "
+            f"Sheet yang tersedia: {source_workbook.sheetnames}"
+        )
+
+    data = [list(row) for row in source_workbook[sheet_name].iter_rows(values_only=True)]
+    if not data:
+        raise ValueError(f"Sheet '{sheet_name}' kosong, tidak ada data untuk ditulis.")
+
+    write_to_sheet(target_spreadsheet, "db-BT", clean_rows(data))
+
+def process_comdev(source_workbook, target_spreadsheet):
+    sheet_name = "ComDev"
+    if sheet_name not in source_workbook.sheetnames:
+        raise ValueError(
+            f"Sheet '{sheet_name}' tidak ditemukan. "
+            f"Sheet yang tersedia: {source_workbook.sheetnames}"
+        )
+
+    raw_data = [list(row) for row in source_workbook[sheet_name].iter_rows(values_only=True)]
+
+    data = [row[1:] for row in raw_data[3:]]
+    if not data:
+        raise ValueError(f"Sheet '{sheet_name}' kosong, tidak ada data untuk ditulis.")
+
+    write_to_sheet(target_spreadsheet, "db-comdev", clean_rows(data))
 
 def process_follow_up_petani(source_workbook, target_spreadsheet):
     if "Follow Up Petani" not in source_workbook.sheetnames:
@@ -276,51 +240,6 @@ def process_follow_up_petani(source_workbook, target_spreadsheet):
         result.append([safe_get(row, i) for i in range(1, 23)])
 
     write_to_sheet(target_spreadsheet, "FOLLOW_UP_PETANI", clean_rows(result), FOLLOW_UP_DATE_COLS)
-
-
-def process_fire_area(gc):
-    source_ss = gc.open_by_key(FIRE_SOURCE_SPREADSHEET_ID)
-    source_sheet = source_ss.sheet1  # tab pertama
-    all_values = source_sheet.get_all_values()
-
-    if not all_values:
-        return
-
-    header = all_values[0]
-    if FIRE_FILTER_COLUMN not in header:
-        return
-    filter_idx = header.index(FIRE_FILTER_COLUMN)
-
-    coord_idx = header.index(FIRE_COORD_COLUMN) if FIRE_COORD_COLUMN in header else 2  # fallback kolom C
-
-    rows = [row for row in all_values[1:] if safe_get(row, filter_idx) == FIRE_FILTER_VALUE]
-
-    agro_features = load_geojson_features(AGRO_GEOJSON_PATH)
-    owner_features = load_geojson_features(OWNER_GEOJSON_PATH)
-
-    result_rows = []
-    parsed_count = 0
-    agro_match_count = 0
-    owner_match_count = 0
-    for row in rows:
-        point = parse_point(safe_get(row, coord_idx))
-        if point is not None:
-            parsed_count += 1
-        agro_value = find_overlay_value(point, agro_features, AGRO_GEOJSON_PROPERTY)
-        owner_value = find_overlay_value(point, owner_features, OWNER_GEOJSON_PROPERTY)
-        if agro_value:
-            agro_match_count += 1
-        if owner_value:
-            owner_match_count += 1
-        result_rows.append(list(row) + [agro_value, owner_value])
-
-
-    final_header = header + [AGRO_OUTPUT_COLUMN, OWNER_OUTPUT_COLUMN]
-    filtered = [final_header] + result_rows
-
-    target_ss = gc.open_by_key(FIRE_TARGET_SPREADSHEET_ID)
-    write_range_only(target_ss, "Sheet1", filtered, FIRE_LAST_COL)
-
 
 def main():
     creds_dict = json.loads(os.environ["GOOGLE_CREDENTIALS"])
@@ -340,7 +259,17 @@ def main():
     followup_wb = download_workbook(DROPBOX_URL_FOLLOWUP, "Potential-Farmer-for-ARR")
     process_follow_up_petani(followup_wb, target_spreadsheet)
 
-    process_fire_area(gc)
+    ct_compile_wb = download_workbook(DROPBOX_URL_CT_COMPILE, "CT Compile")
+    cameratrap_spreadsheet = gc.open_by_key(CAMERATRAP_SPREADSHEET_ID)
+    process_ct_compile(ct_compile_wb, cameratrap_spreadsheet)
+
+    bt_compile_wb = download_workbook(DROPBOX_URL_BT_COMPILE, "BT Compile")
+    bt_spreadsheet = gc.open_by_key(BT_SPREADSHEET_ID)
+    process_bt_compile(bt_compile_wb, bt_spreadsheet)
+
+    comdev_wb = download_workbook(DROPBOX_URL_COMDEV, "ComDev Database")
+    comdev_spreadsheet = gc.open_by_key(COMDEV_SPREADSHEET_ID)
+    process_comdev(comdev_wb, comdev_spreadsheet)
 
 
 if __name__ == "__main__":
