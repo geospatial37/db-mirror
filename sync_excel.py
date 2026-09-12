@@ -8,7 +8,7 @@ from datetime import datetime, date, time
 from decimal import Decimal
 from google.oauth2.service_account import Credentials
 
-#KONFIGURASI
+# ==== KONFIGURASI ====
 DROPBOX_URL_PLANTING = "https://www.dropbox.com/scl/fi/yw173h2zgnm6h3965i2ra/Database-for-Planting.xlsx?rlkey=9tfv2u3u2f12w641iauyoqc6w&dl=1"
 DROPBOX_URL_FOLLOWUP = "https://www.dropbox.com/scl/fi/av13w2gl8etjfs6ai6e0i/Potential-Farmer-for-ARR.xlsx?rlkey=qeg53qzba72yguf2nt2d2ek1t&dl=1"
 DROPBOX_URL_CT_COMPILE = "https://www.dropbox.com/scl/fi/bg82woa41npj9sfc6l58h/CT-Compile.xlsx?rlkey=yu29wz7rjpgvzh7vttahexc0n&dl=1"
@@ -30,7 +30,7 @@ SUMMARY_HEADER = [
     "Nominal_T1", "Nominal_T2", "Nominal_T3", "Nominal_T4", "Nominal_T5",
     "Nominal_T6", "Nominal_T7", "Nominal_T8", "Nominal_T9", "Nominal_T10", "Nominal_T11",
     "PupukPadat", "PupukCair", "tanggal_bpo", "insentifMTL", "tanggal_mtl",
-    "dusun", "luas_agro", "luas_temb", "ENL", "ENP",
+    "dusun", "luas_agro", "luas_temb", "ENL", "ENP", "Total_Tanaman",
 ]
 ARR_SUMMARY_DATE_COLS = ["J", "K", "AR"]  # Tgl_Partisipasi, Tgl_Realisasi, tanggal_mtl
 
@@ -48,7 +48,7 @@ FOLLOW_UP_HEADER = [
     "pot_agr_reg", "pot_tbw", "pot_bpo", "pot_mtl",
     "tgl_update", "status", "keterangan",
 ]
-FOLLOW_UP_DATE_COLS = ["T"]  # tgl_update
+FOLLOW_UP_DATE_COLS = ["T"] 
 
 def clean_cell(value):
     """Konversi tipe data yang tidak bisa langsung dikirim ke Google Sheets API."""
@@ -64,13 +64,16 @@ def clean_cell(value):
         return float(value)
     return value
 
+
 def clean_rows(rows):
     return [[clean_cell(c) for c in row] for row in rows]
+
 
 def safe_get(row, idx):
     if idx < 0 or idx >= len(row):
         return ""
     return row[idx]
+
 
 def write_to_sheet(target_spreadsheet, sheet_name, data, date_cols=None):
     try:
@@ -92,6 +95,7 @@ def write_to_sheet(target_spreadsheet, sheet_name, data, date_cols=None):
                 pass
 
     return sheet
+
 
 def download_workbook(url, label):
     response = requests.get(url)
@@ -124,7 +128,7 @@ def process_arr(source_workbook, target_spreadsheet):
     data = [["" if c == "#REF!" else c for c in row] for row in data]
 
     if len(data) >= 2:
-        del data[1]  # baris kedua adalah baris kosong/sub-header sisa
+        del data[1]  
 
     write_to_sheet(target_spreadsheet, "ARR", clean_rows(data))
 
@@ -150,7 +154,7 @@ def process_arr(source_workbook, target_spreadsheet):
             safe_get(row, 39), safe_get(row, 40), safe_get(row, 41),
             safe_get(row, 43), safe_get(row, 44),
             safe_get(row, 12), safe_get(row, 16), safe_get(row, 17),
-            safe_get(row, 18), safe_get(row, 19),
+            safe_get(row, 18), safe_get(row, 19), safe_get(row, 47),
         ]
         summary.append(clean_rows([summary_row])[0])
 
