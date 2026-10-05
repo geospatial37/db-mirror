@@ -1,6 +1,7 @@
 import os
 import json
 import io
+import time as timer
 import requests
 import openpyxl
 import gspread
@@ -8,7 +9,6 @@ from datetime import datetime, date, time
 from decimal import Decimal
 from google.oauth2.service_account import Credentials
 
-# ==== KONFIGURASI ====
 DROPBOX_URL_PLANTING = "https://www.dropbox.com/scl/fi/yw173h2zgnm6h3965i2ra/Database-for-Planting.xlsx?rlkey=9tfv2u3u2f12w641iauyoqc6w&dl=1"
 DROPBOX_URL_FOLLOWUP = "https://www.dropbox.com/scl/fi/av13w2gl8etjfs6ai6e0i/Potential-Farmer-for-ARR.xlsx?rlkey=qeg53qzba72yguf2nt2d2ek1t&dl=1"
 DROPBOX_URL_CT_COMPILE = "https://www.dropbox.com/scl/fi/bg82woa41npj9sfc6l58h/CT-Compile.xlsx?rlkey=yu29wz7rjpgvzh7vttahexc0n&dl=1"
@@ -21,6 +21,7 @@ CAMERATRAP_SPREADSHEET_ID = "1Zkm82R3ct1HY1ov_HL35M9qEJudKPCkf0wGSNGxwdQ4"
 BT_SPREADSHEET_ID = "1NJPa0nnULKqlihlkZo7J9M6gALi71LZ2_cs-0qz8SuI"
 COMDEV_SPREADSHEET_ID = "1GB64g8bGV_IFjXcpRL7bu4lj9FtgRLKcUXqpNMzg50c"
 NURSERY_SPREADSHEET_ID = "1or3IIjtpas5QD8PRAfO8WdhW6iTc-xH7v0B7hNOAF5M"
+KTH_SPREADSHEET_ID = "1_8jR1z131_-9k3QVbsaGFRn8MY2JPPiEAgWOZliKo_k"
 
 SUMMARY_HEADER = [
     "No", "Grid", "KTH", "Luas", "Tipe", "Petani", "Jenis Kelamin", "Desa",
@@ -34,13 +35,10 @@ SUMMARY_HEADER = [
     "PupukPadat", "PupukCair", "tanggal_bpo", "insentifMTL", "tanggal_mtl",
     "dusun", "luas_agro", "luas_temb", "ENL", "ENP", "Total_Tanaman",
 ]
-ARR_SUMMARY_DATE_COLS = ["J", "K", "AR"]  # Tgl_Partisipasi, Tgl_Realisasi, tanggal_mtl
+ARR_SUMMARY_DATE_COLS = ["J", "K", "AR"]
 
-# Kolom tambahan di akhir ARR_SUMMARY, diambil dari sheet "ARR" (indeks dihitung
-# setelah kolom "No" dijadikan kolom A, sesuai tampilan sheet "ARR" di Google Sheets).
-# Header-nya diambil otomatis dari baris header ARR, diberi prefix "E-" / "P-".
-ARR_EXTRA_E_COLS = ("BY", "CU")  # -> header "E-<judul asli>"
-ARR_EXTRA_P_COLS = ("CX", "DT")  # -> header "P-<judul asli>"
+ARR_EXTRA_E_COLS = ("BY", "CU")
+ARR_EXTRA_P_COLS = ("CX", "DT")
 
 TARGET_CAPAIAN_MAPPING = {
     "Target Penanaman Tembawang (Ha)": "tembawang",
@@ -56,17 +54,10 @@ FOLLOW_UP_HEADER = [
     "pot_agr_reg", "pot_tbw", "pot_bpo", "pot_mtl",
     "tgl_update", "status", "keterangan",
 ]
-FOLLOW_UP_DATE_COLS = ["T"]  # tgl_update
+FOLLOW_UP_DATE_COLS = ["T"]
 
-# Catatan (2026-07-17): di sheet "ARR" sumber ada 6 kolom baru (AA-AE, AL) yang
-# menggeser semua index >= 32 (AG dst.) sebesar +6. Index < 26 tidak berubah.
-
-# ---------------------------------------------------------------------------
-# Util
-# ---------------------------------------------------------------------------
 
 def clean_cell(value):
-    """Konversi tipe data yang tidak bisa langsung dikirim ke Google Sheets API."""
     if value is None:
         return ""
     if isinstance(value, datetime):
@@ -91,7 +82,6 @@ def safe_get(row, idx):
 
 
 def col_to_index(col_letters):
-    """Konversi huruf kolom Excel/Sheets (mis. 'BY') ke index 0-based (A=0)."""
     result = 0
     for ch in col_letters:
         result = result * 26 + (ord(ch.upper()) - ord("A") + 1)
@@ -107,6 +97,14 @@ def write_to_sheet(target_spreadsheet, sheet_name, data, date_cols=None):
     sheet.clear()
     if data:
         sheet.update(range_name="A1", values=data, value_input_option="USER_ENTERED")
+
+    target_rows = max(len(data), 1)
+    target_cols = max((len(row) for row in data), default=1)
+    target_cols = max(target_cols, 1)
+    try:
+        sheet.resize(rows=target_rows, cols=target_cols)
+    except Exception:
+        pass
 
     if date_cols and len(data) >= 2:
         for col in date_cols:
@@ -126,15 +124,50 @@ def download_workbook(url, label):
     return openpyxl.load_workbook(io.BytesIO(response.content), data_only=True)
 
 
-# ---------------------------------------------------------------------------
-# Sheet ARR (dengan pembersihan header + remap ke ARR_SUMMARY)
-# ---------------------------------------------------------------------------
+def _is_blank_cell(value):
+    return value is None or (isinstance(value, str) and value.strip() == "")
+
+
+def _is_blank_row(row):
+    return all(_is_blank_cell(c) for c in row)
+
+
+def read_sheet_rows(sheet, empty_row_gap=100):
+    rows = []
+    empty_streak = 0
+    for row in sheet.iter_rows(values_only=True):
+        row = list(row)
+        if _is_blank_row(row):
+            empty_streak += 1
+            if empty_streak >= empty_row_gap:
+                break
+        else:
+            empty_streak = 0
+        rows.append(row)
+
+    while rows and _is_blank_row(rows[-1]):
+        rows.pop()
+
+    if not rows:
+        return rows
+
+    max_cols = max(len(r) for r in rows)
+
+    def col_is_blank(idx):
+        return all(_is_blank_cell(r[idx]) if idx < len(r) else True for r in rows)
+
+    last_col = max_cols
+    while last_col > 0 and col_is_blank(last_col - 1):
+        last_col -= 1
+
+    return [row[:last_col] for row in rows]
+
 
 def process_arr(source_workbook, target_spreadsheet):
     if "ARR" not in source_workbook.sheetnames:
         return
 
-    raw_data = [list(row) for row in source_workbook["ARR"].iter_rows(values_only=True)]
+    raw_data = read_sheet_rows(source_workbook["ARR"])
 
     header_row_idx = next(
         (i for i, row in enumerate(raw_data)
@@ -156,12 +189,10 @@ def process_arr(source_workbook, target_spreadsheet):
     data = [["" if c == "#REF!" else c for c in row] for row in data]
 
     if len(data) >= 2:
-        del data[1]  # baris kedua adalah baris kosong/sub-header sisa
+        del data[1]
 
     write_to_sheet(target_spreadsheet, "ARR", clean_rows(data))
 
-    # Header baris pertama di "data" (setelah "No" dijadikan kolom A) dipakai
-    # untuk membangun header dinamis kolom tambahan E-... dan P-...
     header_row = data[0]
     e_start, e_end = col_to_index(ARR_EXTRA_E_COLS[0]), col_to_index(ARR_EXTRA_E_COLS[1])
     p_start, p_end = col_to_index(ARR_EXTRA_P_COLS[0]), col_to_index(ARR_EXTRA_P_COLS[1])
@@ -201,16 +232,12 @@ def process_arr(source_workbook, target_spreadsheet):
     write_to_sheet(target_spreadsheet, "ARR_SUMMARY", summary, ARR_SUMMARY_DATE_COLS)
 
 
-# ---------------------------------------------------------------------------
-# Sheet Target Capaian -> TARGET_CAPAIAN
-# ---------------------------------------------------------------------------
-
 def process_target_capaian(source_workbook, target_spreadsheet):
     if "Target Capaian" not in source_workbook.sheetnames:
         return
 
-    raw_data = [list(row) for row in source_workbook["Target Capaian"].iter_rows(values_only=True)]
-    data = raw_data[1:]  # skip judul besar
+    raw_data = read_sheet_rows(source_workbook["Target Capaian"])
+    data = raw_data[1:]
     if not data:
         return
 
@@ -222,27 +249,40 @@ def process_target_capaian(source_workbook, target_spreadsheet):
     write_to_sheet(target_spreadsheet, "TARGET_CAPAIAN", clean_rows(data))
 
 
-# ---------------------------------------------------------------------------
-# Sheet Cumulative Area -> PLANTING_CUMULATIVE_AREA
-# ---------------------------------------------------------------------------
-
 def process_cumulative_area(source_workbook, target_spreadsheet):
     sheet_name = "Cumulative Area"
     if sheet_name not in source_workbook.sheetnames:
         return
 
-    raw_data = [list(row) for row in source_workbook[sheet_name].iter_rows(values_only=True)]
+    raw_data = read_sheet_rows(source_workbook[sheet_name])
 
-    # Baris 1-3 adalah judul/header besar, ambil mulai baris ke-4 (index 3)
-    # Kolom A kosong/tidak dipakai, ambil mulai kolom B (index 1)
     data = [row[1:] for row in raw_data[3:]]
 
     write_to_sheet(target_spreadsheet, "Planting Cumulative Area", clean_rows(data))
 
 
-# ---------------------------------------------------------------------------
-# Sheet CT Compile -> db-CT Compile (spreadsheet "cameratrap db", terpisah)
-# ---------------------------------------------------------------------------
+def process_kth(source_workbook, target_spreadsheet):
+    sheet_name = "KTH"
+    if sheet_name not in source_workbook.sheetnames:
+        raise ValueError(
+            f"Sheet '{sheet_name}' tidak ditemukan. "
+            f"Sheet yang tersedia: {source_workbook.sheetnames}"
+        )
+
+    raw_data = read_sheet_rows(source_workbook[sheet_name])
+
+    a_start, a_end = col_to_index("A"), col_to_index("I")
+    n_start, n_end = col_to_index("N"), col_to_index("R")
+
+    data_ai = [row[a_start:a_end + 1] for row in raw_data]
+    data_nr = [row[n_start:n_end + 1] for row in raw_data]
+
+    if not data_ai:
+        raise ValueError(f"Sheet '{sheet_name}' kosong, tidak ada data untuk ditulis.")
+
+    write_to_sheet(target_spreadsheet, "Sheet1", clean_rows(data_ai))
+    write_to_sheet(target_spreadsheet, "Sheet2", clean_rows(data_nr))
+
 
 def process_ct_compile(source_workbook, target_spreadsheet):
     sheet_name = "CT Compile"
@@ -252,16 +292,12 @@ def process_ct_compile(source_workbook, target_spreadsheet):
             f"Sheet yang tersedia: {source_workbook.sheetnames}"
         )
 
-    data = [list(row) for row in source_workbook[sheet_name].iter_rows(values_only=True)]
+    data = read_sheet_rows(source_workbook[sheet_name])
     if not data:
         raise ValueError(f"Sheet '{sheet_name}' kosong, tidak ada data untuk ditulis.")
 
     write_to_sheet(target_spreadsheet, "db-CT Compile", clean_rows(data))
 
-
-# ---------------------------------------------------------------------------
-# Sheet BT -> db-BT (spreadsheet BT, terpisah)
-# ---------------------------------------------------------------------------
 
 def process_bt_compile(source_workbook, target_spreadsheet):
     sheet_name = "BT"
@@ -271,16 +307,12 @@ def process_bt_compile(source_workbook, target_spreadsheet):
             f"Sheet yang tersedia: {source_workbook.sheetnames}"
         )
 
-    data = [list(row) for row in source_workbook[sheet_name].iter_rows(values_only=True)]
+    data = read_sheet_rows(source_workbook[sheet_name])
     if not data:
         raise ValueError(f"Sheet '{sheet_name}' kosong, tidak ada data untuk ditulis.")
 
     write_to_sheet(target_spreadsheet, "db-BT", clean_rows(data))
 
-
-# ---------------------------------------------------------------------------
-# Sheet ComDev -> db-comdev (spreadsheet ComDev, terpisah)
-# ---------------------------------------------------------------------------
 
 def process_comdev(source_workbook, target_spreadsheet):
     sheet_name = "ComDev"
@@ -290,19 +322,14 @@ def process_comdev(source_workbook, target_spreadsheet):
             f"Sheet yang tersedia: {source_workbook.sheetnames}"
         )
 
-    raw_data = [list(row) for row in source_workbook[sheet_name].iter_rows(values_only=True)]
+    raw_data = read_sheet_rows(source_workbook[sheet_name])
 
-    # Mulai baris ke-4 (index 3), mulai kolom B (index 1)
     data = [row[1:] for row in raw_data[3:]]
     if not data:
         raise ValueError(f"Sheet '{sheet_name}' kosong, tidak ada data untuk ditulis.")
 
     write_to_sheet(target_spreadsheet, "db-comdev", clean_rows(data))
 
-
-# ---------------------------------------------------------------------------
-# Sheet Nursery Stock -> Nursery Stock (spreadsheet Nursery, terpisah)
-# ---------------------------------------------------------------------------
 
 def process_nursery_stock(source_workbook, target_spreadsheet):
     sheet_name = "Nursery Stock"
@@ -312,19 +339,14 @@ def process_nursery_stock(source_workbook, target_spreadsheet):
             f"Sheet yang tersedia: {source_workbook.sheetnames}"
         )
 
-    raw_data = [list(row) for row in source_workbook[sheet_name].iter_rows(values_only=True)]
+    raw_data = read_sheet_rows(source_workbook[sheet_name])
 
-    # Mulai baris ke-4 (index 3), mulai kolom B (index 1)
     data = [row[1:] for row in raw_data[3:]]
     if not data:
         raise ValueError(f"Sheet '{sheet_name}' kosong, tidak ada data untuk ditulis.")
 
     write_to_sheet(target_spreadsheet, "Nursery Stock", clean_rows(data))
 
-
-# ---------------------------------------------------------------------------
-# Sheet Log -> Log (spreadsheet Nursery, terpisah)
-# ---------------------------------------------------------------------------
 
 def process_log(source_workbook, target_spreadsheet):
     sheet_name = "Log"
@@ -334,12 +356,10 @@ def process_log(source_workbook, target_spreadsheet):
             f"Sheet yang tersedia: {source_workbook.sheetnames}"
         )
 
-    raw_data = [list(row) for row in source_workbook[sheet_name].iter_rows(values_only=True)]
+    raw_data = read_sheet_rows(source_workbook[sheet_name])
 
-    # Mulai baris ke-4 (index 3), mulai kolom B (index 1)
     data = [row[1:] for row in raw_data[3:]]
 
-    # Skip baris ke-5 (baris kedua dalam potongan data ini, index 1)
     if len(data) >= 2:
         del data[1]
 
@@ -349,15 +369,11 @@ def process_log(source_workbook, target_spreadsheet):
     write_to_sheet(target_spreadsheet, "Log", clean_rows(data))
 
 
-# ---------------------------------------------------------------------------
-# Sheet Follow Up Petani -> FOLLOW_UP_PETANI
-# ---------------------------------------------------------------------------
-
 def process_follow_up_petani(source_workbook, target_spreadsheet):
     if "Follow Up Petani" not in source_workbook.sheetnames:
         return
 
-    data = [list(row) for row in source_workbook["Follow Up Petani"].iter_rows(values_only=True)]
+    data = read_sheet_rows(source_workbook["Follow Up Petani"])
     result = [FOLLOW_UP_HEADER]
 
     for row in data[3:]:
@@ -368,11 +384,24 @@ def process_follow_up_petani(source_workbook, target_spreadsheet):
     write_to_sheet(target_spreadsheet, "FOLLOW_UP_PETANI", clean_rows(result), FOLLOW_UP_DATE_COLS)
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
+def run_step(label, errors, func):
+    start = timer.time()
+    try:
+        result = func()
+        elapsed = timer.time() - start
+        print(f"[OK] {label} ({elapsed:.1f}s)")
+        return result
+    except Exception as e:
+        elapsed = timer.time() - start
+        print(f"[GAGAL] {label} ({elapsed:.1f}s): {e}")
+        errors.append((label, str(e)))
+        return None
+
 
 def main():
+    errors = []
+    run_start = timer.time()
+
     creds_dict = json.loads(os.environ["GOOGLE_CREDENTIALS"])
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
@@ -382,30 +411,71 @@ def main():
     gc = gspread.authorize(creds)
     target_spreadsheet = gc.open_by_key(TARGET_SPREADSHEET_ID)
 
-    planting_wb = download_workbook(DROPBOX_URL_PLANTING, "Database-for-Planting")
-    process_arr(planting_wb, target_spreadsheet)
-    process_target_capaian(planting_wb, target_spreadsheet)
-    process_cumulative_area(planting_wb, target_spreadsheet)
+    planting_wb = run_step(
+        "Download Database-for-Planting", errors,
+        lambda: download_workbook(DROPBOX_URL_PLANTING, "Database-for-Planting"),
+    )
+    if planting_wb:
+        run_step("process_arr", errors, lambda: process_arr(planting_wb, target_spreadsheet))
+        run_step("process_target_capaian", errors, lambda: process_target_capaian(planting_wb, target_spreadsheet))
+        run_step("process_cumulative_area", errors, lambda: process_cumulative_area(planting_wb, target_spreadsheet))
 
-    followup_wb = download_workbook(DROPBOX_URL_FOLLOWUP, "Potential-Farmer-for-ARR")
-    process_follow_up_petani(followup_wb, target_spreadsheet)
+        kth_spreadsheet = run_step("Buka spreadsheet KTH", errors, lambda: gc.open_by_key(KTH_SPREADSHEET_ID))
+        if kth_spreadsheet:
+            run_step("process_kth", errors, lambda: process_kth(planting_wb, kth_spreadsheet))
 
-    ct_compile_wb = download_workbook(DROPBOX_URL_CT_COMPILE, "CT Compile")
-    cameratrap_spreadsheet = gc.open_by_key(CAMERATRAP_SPREADSHEET_ID)
-    process_ct_compile(ct_compile_wb, cameratrap_spreadsheet)
+    followup_wb = run_step(
+        "Download Potential-Farmer-for-ARR", errors,
+        lambda: download_workbook(DROPBOX_URL_FOLLOWUP, "Potential-Farmer-for-ARR"),
+    )
+    if followup_wb:
+        run_step("process_follow_up_petani", errors, lambda: process_follow_up_petani(followup_wb, target_spreadsheet))
 
-    bt_compile_wb = download_workbook(DROPBOX_URL_BT_COMPILE, "BT Compile")
-    bt_spreadsheet = gc.open_by_key(BT_SPREADSHEET_ID)
-    process_bt_compile(bt_compile_wb, bt_spreadsheet)
+    ct_compile_wb = run_step(
+        "Download CT Compile", errors,
+        lambda: download_workbook(DROPBOX_URL_CT_COMPILE, "CT Compile"),
+    )
+    if ct_compile_wb:
+        cameratrap_spreadsheet = run_step("Buka spreadsheet cameratrap db", errors, lambda: gc.open_by_key(CAMERATRAP_SPREADSHEET_ID))
+        if cameratrap_spreadsheet:
+            run_step("process_ct_compile", errors, lambda: process_ct_compile(ct_compile_wb, cameratrap_spreadsheet))
 
-    comdev_wb = download_workbook(DROPBOX_URL_COMDEV, "ComDev Database")
-    comdev_spreadsheet = gc.open_by_key(COMDEV_SPREADSHEET_ID)
-    process_comdev(comdev_wb, comdev_spreadsheet)
+    bt_compile_wb = run_step(
+        "Download BT Compile", errors,
+        lambda: download_workbook(DROPBOX_URL_BT_COMPILE, "BT Compile"),
+    )
+    if bt_compile_wb:
+        bt_spreadsheet = run_step("Buka spreadsheet BT", errors, lambda: gc.open_by_key(BT_SPREADSHEET_ID))
+        if bt_spreadsheet:
+            run_step("process_bt_compile", errors, lambda: process_bt_compile(bt_compile_wb, bt_spreadsheet))
 
-    nursery_wb = download_workbook(DROPBOX_URL_NURSERY, "New Nursery Database")
-    nursery_spreadsheet = gc.open_by_key(NURSERY_SPREADSHEET_ID)
-    process_nursery_stock(nursery_wb, nursery_spreadsheet)
-    process_log(nursery_wb, nursery_spreadsheet)
+    comdev_wb = run_step(
+        "Download ComDev Database", errors,
+        lambda: download_workbook(DROPBOX_URL_COMDEV, "ComDev Database"),
+    )
+    if comdev_wb:
+        comdev_spreadsheet = run_step("Buka spreadsheet ComDev", errors, lambda: gc.open_by_key(COMDEV_SPREADSHEET_ID))
+        if comdev_spreadsheet:
+            run_step("process_comdev", errors, lambda: process_comdev(comdev_wb, comdev_spreadsheet))
+
+    nursery_wb = run_step(
+        "Download New Nursery Database", errors,
+        lambda: download_workbook(DROPBOX_URL_NURSERY, "New Nursery Database"),
+    )
+    if nursery_wb:
+        nursery_spreadsheet = run_step("Buka spreadsheet Nursery", errors, lambda: gc.open_by_key(NURSERY_SPREADSHEET_ID))
+        if nursery_spreadsheet:
+            run_step("process_nursery_stock", errors, lambda: process_nursery_stock(nursery_wb, nursery_spreadsheet))
+            run_step("process_log", errors, lambda: process_log(nursery_wb, nursery_spreadsheet))
+
+    total_elapsed = timer.time() - run_start
+    print()
+    if errors:
+        print(f"Selesai dalam {total_elapsed:.1f}s dengan {len(errors)} bagian gagal (dilewati, bagian lain tetap berhasil ditulis):")
+        for label, msg in errors:
+            print(f" - {label}: {msg}")
+    else:
+        print(f"Selesai dalam {total_elapsed:.1f}s, semua bagian berhasil.")
 
 
 if __name__ == "__main__":
