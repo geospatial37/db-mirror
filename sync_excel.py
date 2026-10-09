@@ -272,7 +272,7 @@ def process_kth(source_workbook, target_spreadsheet):
     raw_data = read_sheet_rows(source_workbook[sheet_name])
 
     a_start, a_end = col_to_index("A"), col_to_index("I")
-    n_start, n_end = col_to_index("N"), col_to_index("R")
+    n_start, n_end = col_to_index("N"), col_to_index("S")
 
     data_ai = [row[a_start:a_end + 1] for row in raw_data]
     data_nr = [row[n_start:n_end + 1] for row in raw_data]
