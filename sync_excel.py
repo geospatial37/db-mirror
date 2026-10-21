@@ -15,6 +15,7 @@ DROPBOX_URL_CT_COMPILE = "https://www.dropbox.com/scl/fi/bg82woa41npj9sfc6l58h/C
 DROPBOX_URL_BT_COMPILE = "https://www.dropbox.com/scl/fi/5au2sa502w64h32in2azi/BT-Compile.xlsx?rlkey=8do0u62sevgy3vcovrvd4ptox&dl=1"
 DROPBOX_URL_COMDEV = "https://www.dropbox.com/scl/fi/bkkqvxk9nnqkxr84qry5f/ComDev-Database_Update_20260818.xlsx?rlkey=t5691lpd5x0pax5bazvf9n8st&dl=1"
 DROPBOX_URL_NURSERY = "https://www.dropbox.com/scl/fi/4wo13modlf34h2fdmpeus/New-Nursery-Database_.xlsx?rlkey=lgj3j98jq6fbnlq3bn1h6g5et&dl=1"
+DROPBOX_URL_HSE = "https://www.dropbox.com/scl/fi/g4gxslp755l98nxo5d5av/Dashboard-HSE-Final.xlsx?rlkey=4c1xl96yor90724jswlcsg3v1&dl=1"
 
 TARGET_SPREADSHEET_ID = "1-LHCIUy1iD154WczY4Da_-iRaILtvL0mOW4gRW6YQac"
 CAMERATRAP_SPREADSHEET_ID = "1Zkm82R3ct1HY1ov_HL35M9qEJudKPCkf0wGSNGxwdQ4"
@@ -22,6 +23,7 @@ BT_SPREADSHEET_ID = "1NJPa0nnULKqlihlkZo7J9M6gALi71LZ2_cs-0qz8SuI"
 COMDEV_SPREADSHEET_ID = "1GB64g8bGV_IFjXcpRL7bu4lj9FtgRLKcUXqpNMzg50c"
 NURSERY_SPREADSHEET_ID = "1or3IIjtpas5QD8PRAfO8WdhW6iTc-xH7v0B7hNOAF5M"
 KTH_SPREADSHEET_ID = "1_8jR1z131_-9k3QVbsaGFRn8MY2JPPiEAgWOZliKo_k"
+HSE_SPREADSHEET_ID = "1ROa7ApqWNewNiI4wtV3pPHMdTDc02XrTypadPrkbM0s"
 
 SUMMARY_HEADER = [
     "No", "Grid", "KTH", "Luas", "Tipe", "Petani", "Jenis Kelamin", "Desa",
@@ -37,6 +39,9 @@ SUMMARY_HEADER = [
 ]
 ARR_SUMMARY_DATE_COLS = ["J", "K", "AR"]
 
+ARR_INSERTED_COLS = ("BW", "CX", "DX")
+ARR_ASAM_E_COL = ("CX", "E-Asam Keranji")
+ARR_ASAM_P_COL = ("DX", "P-Asam Keranji")
 ARR_EXTRA_E_COLS = ("BY", "CU")
 ARR_EXTRA_P_COLS = ("CX", "DT")
 
@@ -193,6 +198,13 @@ def process_arr(source_workbook, target_spreadsheet):
 
     write_to_sheet(target_spreadsheet, "ARR", clean_rows(data))
 
+    asam_e_idx = col_to_index(ARR_ASAM_E_COL[0]) - no_col_index
+    asam_p_idx = col_to_index(ARR_ASAM_P_COL[0]) - no_col_index
+    asam_values = [(safe_get(r, asam_e_idx), safe_get(r, asam_p_idx)) for r in data]
+
+    inserted_idx = {col_to_index(c) - no_col_index for c in ARR_INSERTED_COLS}
+    data = [[v for j, v in enumerate(r) if j not in inserted_idx] for r in data]
+
     header_row = data[0]
     e_start, e_end = col_to_index(ARR_EXTRA_E_COLS[0]), col_to_index(ARR_EXTRA_E_COLS[1])
     p_start, p_end = col_to_index(ARR_EXTRA_P_COLS[0]), col_to_index(ARR_EXTRA_P_COLS[1])
@@ -201,8 +213,12 @@ def process_arr(source_workbook, target_spreadsheet):
     extra_e_headers = [f"E-{safe_get(header_row, i)}" for i in extra_e_indices]
     extra_p_headers = [f"P-{safe_get(header_row, i)}" for i in extra_p_indices]
 
-    summary = [SUMMARY_HEADER + extra_e_headers + extra_p_headers]
-    for row in data[1:]:
+    summary = [
+        SUMMARY_HEADER
+        + extra_e_headers + [ARR_ASAM_E_COL[1]]
+        + extra_p_headers + [ARR_ASAM_P_COL[1]]
+    ]
+    for row, (asam_e, asam_p) in zip(data[1:], asam_values[1:]):
         gender = "Laki-laki" if safe_get(row, 8) == 1 else "Perempuan" if safe_get(row, 9) == 1 else ""
         tipe = {"TBW": "Tembawang", "AGR": "Agroforestri"}.get(safe_get(row, 5), safe_get(row, 5))
 
@@ -225,8 +241,8 @@ def process_arr(source_workbook, target_spreadsheet):
             safe_get(row, 12), safe_get(row, 16), safe_get(row, 17),
             safe_get(row, 18), safe_get(row, 19), safe_get(row, 47),
         ]
-        summary_row += [safe_get(row, i) for i in extra_e_indices]
-        summary_row += [safe_get(row, i) for i in extra_p_indices]
+        summary_row += [safe_get(row, i) for i in extra_e_indices] + [asam_e]
+        summary_row += [safe_get(row, i) for i in extra_p_indices] + [asam_p]
         summary.append(clean_rows([summary_row])[0])
 
     write_to_sheet(target_spreadsheet, "ARR_SUMMARY", summary, ARR_SUMMARY_DATE_COLS)
@@ -369,6 +385,22 @@ def process_log(source_workbook, target_spreadsheet):
     write_to_sheet(target_spreadsheet, "Log", clean_rows(data))
 
 
+def process_hse_sheet(source_workbook, target_spreadsheet, sheet_name, last_col):
+    if sheet_name not in source_workbook.sheetnames:
+        raise ValueError(
+            f"Sheet '{sheet_name}' tidak ditemukan. "
+            f"Sheet yang tersedia: {source_workbook.sheetnames}"
+        )
+
+    raw_data = read_sheet_rows(source_workbook[sheet_name])
+    end = col_to_index(last_col) + 1
+    data = [row[:end] for row in raw_data[3:]]
+    if not data:
+        raise ValueError(f"Sheet '{sheet_name}' kosong, tidak ada data untuk ditulis.")
+
+    write_to_sheet(target_spreadsheet, sheet_name, clean_rows(data))
+
+
 def process_follow_up_petani(source_workbook, target_spreadsheet):
     if "Follow Up Petani" not in source_workbook.sheetnames:
         return
@@ -467,6 +499,16 @@ def main():
         if nursery_spreadsheet:
             run_step("process_nursery_stock", errors, lambda: process_nursery_stock(nursery_wb, nursery_spreadsheet))
             run_step("process_log", errors, lambda: process_log(nursery_wb, nursery_spreadsheet))
+
+    hse_wb = run_step(
+        "Download Dashboard HSE", errors,
+        lambda: download_workbook(DROPBOX_URL_HSE, "Dashboard HSE"),
+    )
+    if hse_wb:
+        hse_spreadsheet = run_step("Buka spreadsheet HSE", errors, lambda: gc.open_by_key(HSE_SPREADSHEET_ID))
+        if hse_spreadsheet:
+            run_step("process_hse_register_insiden", errors, lambda: process_hse_sheet(hse_wb, hse_spreadsheet, "Register Insiden", "AO"))
+            run_step("process_hse_manhours", errors, lambda: process_hse_sheet(hse_wb, hse_spreadsheet, "Manhours", "Q"))
 
     total_elapsed = timer.time() - run_start
     print()
