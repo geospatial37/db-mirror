@@ -23,6 +23,7 @@ BT_SPREADSHEET_ID = "1NJPa0nnULKqlihlkZo7J9M6gALi71LZ2_cs-0qz8SuI"
 COMDEV_SPREADSHEET_ID = "1GB64g8bGV_IFjXcpRL7bu4lj9FtgRLKcUXqpNMzg50c"
 NURSERY_SPREADSHEET_ID = "1or3IIjtpas5QD8PRAfO8WdhW6iTc-xH7v0B7hNOAF5M"
 KTH_SPREADSHEET_ID = "1_8jR1z131_-9k3QVbsaGFRn8MY2JPPiEAgWOZliKo_k"
+LOG_MONITORING_SPREADSHEET_ID = "1DRYnz-86Gx7mIzGaeNzUUd9xz_HoxwCgF4W-lLsOYjk"
 HSE_SPREADSHEET_ID = "1ROa7ApqWNewNiI4wtV3pPHMdTDc02XrTypadPrkbM0s"
 
 SUMMARY_HEADER = [
@@ -42,6 +43,7 @@ ARR_SUMMARY_DATE_COLS = ["J", "K", "AR"]
 ARR_INSERTED_COLS = ("BW", "CX", "DX")
 ARR_ASAM_E_COL = ("CX", "E-Asam Keranji")
 ARR_ASAM_P_COL = ("DX", "P-Asam Keranji")
+ARR_PUPUK_COL = ("OI", "Aplikasi Pupuk")
 ARR_EXTRA_E_COLS = ("BY", "CU")
 ARR_EXTRA_P_COLS = ("CX", "DT")
 
@@ -201,6 +203,8 @@ def process_arr(source_workbook, target_spreadsheet):
     asam_e_idx = col_to_index(ARR_ASAM_E_COL[0]) - no_col_index
     asam_p_idx = col_to_index(ARR_ASAM_P_COL[0]) - no_col_index
     asam_values = [(safe_get(r, asam_e_idx), safe_get(r, asam_p_idx)) for r in data]
+    pupuk_idx = col_to_index(ARR_PUPUK_COL[0])
+    pupuk_values = [safe_get(r, pupuk_idx) for r in data]
 
     inserted_idx = {col_to_index(c) - no_col_index for c in ARR_INSERTED_COLS}
     data = [[v for j, v in enumerate(r) if j not in inserted_idx] for r in data]
@@ -217,8 +221,9 @@ def process_arr(source_workbook, target_spreadsheet):
         SUMMARY_HEADER
         + extra_e_headers + [ARR_ASAM_E_COL[1]]
         + extra_p_headers + [ARR_ASAM_P_COL[1]]
+        + [ARR_PUPUK_COL[1]]
     ]
-    for row, (asam_e, asam_p) in zip(data[1:], asam_values[1:]):
+    for row, (asam_e, asam_p), pupuk in zip(data[1:], asam_values[1:], pupuk_values[1:]):
         gender = "Laki-laki" if safe_get(row, 8) == 1 else "Perempuan" if safe_get(row, 9) == 1 else ""
         tipe = {"TBW": "Tembawang", "AGR": "Agroforestri"}.get(safe_get(row, 5), safe_get(row, 5))
 
@@ -243,6 +248,7 @@ def process_arr(source_workbook, target_spreadsheet):
         ]
         summary_row += [safe_get(row, i) for i in extra_e_indices] + [asam_e]
         summary_row += [safe_get(row, i) for i in extra_p_indices] + [asam_p]
+        summary_row.append(pupuk)
         summary.append(clean_rows([summary_row])[0])
 
     write_to_sheet(target_spreadsheet, "ARR_SUMMARY", summary, ARR_SUMMARY_DATE_COLS)
@@ -275,6 +281,28 @@ def process_cumulative_area(source_workbook, target_spreadsheet):
     data = [row[1:] for row in raw_data[3:]]
 
     write_to_sheet(target_spreadsheet, "Planting Cumulative Area", clean_rows(data))
+
+
+def process_log_monitoring(source_workbook, target_spreadsheet):
+    sheet_name = "Log - Monitoring"
+    if sheet_name not in source_workbook.sheetnames:
+        raise ValueError(
+            f"Sheet '{sheet_name}' tidak ditemukan. "
+            f"Sheet yang tersedia: {source_workbook.sheetnames}"
+        )
+
+    raw_data = read_sheet_rows(source_workbook[sheet_name])
+    b, n = col_to_index("B"), col_to_index("N")
+
+    rows = [row[b:n + 1] for row in raw_data]
+    width = n - b + 1
+    rows = [r + [None] * (width - len(r)) for r in rows]
+
+    data = rows[3:4] + rows[5:]
+    if len(data) < 2:
+        raise ValueError(f"Sheet '{sheet_name}' tidak punya data untuk ditulis.")
+
+    write_to_sheet(target_spreadsheet, "Sheet1", clean_rows(data))
 
 
 def process_kth(source_workbook, target_spreadsheet):
@@ -451,6 +479,10 @@ def main():
         run_step("process_arr", errors, lambda: process_arr(planting_wb, target_spreadsheet))
         run_step("process_target_capaian", errors, lambda: process_target_capaian(planting_wb, target_spreadsheet))
         run_step("process_cumulative_area", errors, lambda: process_cumulative_area(planting_wb, target_spreadsheet))
+
+        log_monitoring_spreadsheet = run_step("Buka spreadsheet Log Monitoring", errors, lambda: gc.open_by_key(LOG_MONITORING_SPREADSHEET_ID))
+        if log_monitoring_spreadsheet:
+            run_step("process_log_monitoring", errors, lambda: process_log_monitoring(planting_wb, log_monitoring_spreadsheet))
 
         kth_spreadsheet = run_step("Buka spreadsheet KTH", errors, lambda: gc.open_by_key(KTH_SPREADSHEET_ID))
         if kth_spreadsheet:
