@@ -375,35 +375,6 @@ def process_comdev(source_workbook, target_spreadsheet):
     write_to_sheet(target_spreadsheet, "db-comdev", clean_rows(data))
 
 
-COMDEV_SHEET2_NAME = "db-comdev-2"
-
-
-def process_comdev_sheet2(source_workbook, target_spreadsheet):
-    sheet_name = "ComDev"
-    if sheet_name not in source_workbook.sheetnames:
-        raise ValueError(
-            f"Sheet '{sheet_name}' tidak ditemukan. "
-            f"Sheet yang tersedia: {source_workbook.sheetnames}"
-        )
-
-    raw_data = read_sheet_rows(source_workbook[sheet_name])
-    b, g = col_to_index("B"), col_to_index("G")
-    n, u = col_to_index("N"), col_to_index("U")
-
-    def pick(row):
-        row = list(row) + [None] * (u + 1 - len(row))
-        return row[b:g + 1] + row[n:u + 1]
-
-    if len(raw_data) < 6:
-        raise ValueError(f"Sheet '{sheet_name}' tidak punya baris header ke-6.")
-
-    data = [pick(raw_data[5])] + [pick(r) for r in raw_data[8:]]
-    if len(data) < 2:
-        raise ValueError(f"Sheet '{sheet_name}' tidak punya data mulai baris 9.")
-
-    write_to_sheet(target_spreadsheet, COMDEV_SHEET2_NAME, clean_rows(data))
-
-
 def process_nursery_stock(source_workbook, target_spreadsheet):
     sheet_name = "Nursery Stock"
     if sheet_name not in source_workbook.sheetnames:
@@ -550,7 +521,6 @@ def main():
         comdev_spreadsheet = run_step("Buka spreadsheet ComDev", errors, lambda: gc.open_by_key(COMDEV_SPREADSHEET_ID))
         if comdev_spreadsheet:
             run_step("process_comdev", errors, lambda: process_comdev(comdev_wb, comdev_spreadsheet))
-            run_step("process_comdev_sheet2", errors, lambda: process_comdev_sheet2(comdev_wb, comdev_spreadsheet))
 
     nursery_wb = run_step(
         "Download New Nursery Database", errors,
