@@ -1,6 +1,7 @@
 import os
 import json
 import io
+import re
 import time as timer
 import requests
 import openpyxl
@@ -95,28 +96,57 @@ def col_to_index(col_letters):
     return result - 1
 
 
+WRITE_LIMIT_PER_MINUTE = 50
+_write_times = []
+
+
+def _throttle():
+    now = timer.time()
+    while _write_times and now - _write_times[0] >= 60:
+        _write_times.pop(0)
+    if len(_write_times) >= WRITE_LIMIT_PER_MINUTE:
+        wait = 60 - (now - _write_times[0]) + 1
+        if wait > 0:
+            timer.sleep(wait)
+    _write_times.append(timer.time())
+
+
+def call_with_retry(func, *args, **kwargs):
+    attempts = 6
+    for attempt in range(attempts):
+        _throttle()
+        try:
+            return func(*args, **kwargs)
+        except gspread.exceptions.APIError as e:
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            retryable = status in (429, 500, 502, 503) or "429" in str(e)
+            if not retryable or attempt == attempts - 1:
+                raise
+            timer.sleep(30 + attempt * 15)
+
+
 def write_to_sheet(target_spreadsheet, sheet_name, data, date_cols=None):
     try:
-        sheet = target_spreadsheet.worksheet(sheet_name)
+        sheet = call_with_retry(target_spreadsheet.worksheet, sheet_name)
     except gspread.exceptions.WorksheetNotFound:
-        sheet = target_spreadsheet.add_worksheet(title=sheet_name, rows=100, cols=20)
+        sheet = call_with_retry(target_spreadsheet.add_worksheet, title=sheet_name, rows=100, cols=20)
 
-    sheet.clear()
+    call_with_retry(sheet.clear)
     if data:
-        sheet.update(range_name="A1", values=data, value_input_option="USER_ENTERED")
+        call_with_retry(sheet.update, range_name="A1", values=data, value_input_option="USER_ENTERED")
 
     target_rows = max(len(data), 1)
     target_cols = max((len(row) for row in data), default=1)
     target_cols = max(target_cols, 1)
     try:
-        sheet.resize(rows=target_rows, cols=target_cols)
+        call_with_retry(sheet.resize, rows=target_rows, cols=target_cols)
     except Exception:
         pass
 
     if date_cols and len(data) >= 2:
         for col in date_cols:
             try:
-                sheet.format(f"{col}2:{col}{len(data)}", {
+                call_with_retry(sheet.format, f"{col}2:{col}{len(data)}", {
                     "numberFormat": {"type": "DATE", "pattern": "m/d/yyyy"}
                 })
             except Exception:
@@ -410,6 +440,175 @@ def process_comdev(source_workbook, target_spreadsheet):
     write_to_sheet(target_spreadsheet, "db-comdev", clean_rows(data))
 
 
+COMDEV_SHEET2_NAME = "db-comdev-2"
+COMDEV_ACTIVITY_SHEET_NAME = "db-comdev-kegiatan"
+COMDEV_EXTRA_START_COL = "AW"
+MONTH_NAMES = {
+    "jan", "january", "januari", "feb", "february", "februari", "mar", "march", "maret",
+    "apr", "april", "may", "mei", "jun", "june", "juni", "jul", "july", "juli",
+    "aug", "august", "agu", "agt", "agustus", "sep", "sept", "september",
+    "oct", "october", "okt", "oktober", "nov", "november", "dec", "december", "des", "desember",
+}
+
+
+def _is_numeric_only(value):
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, (int, float, Decimal)):
+        return True
+    if isinstance(value, (datetime, date, time)):
+        return True
+    text = str(value).strip().replace(",", ".")
+    try:
+        float(text)
+        return True
+    except ValueError:
+        return False
+
+
+def _is_month_only(value):
+    return str(value).strip().rstrip(".").lower() in MONTH_NAMES
+
+
+def _has_total_peserta(value):
+    return re.search(r"total[\s_\-]*peserta", str(value), re.IGNORECASE) is not None
+
+
+_PAREN_GROUP = re.compile(r"\([^()]*\)")
+
+
+def clean_comdev_title(value):
+    text = _PAREN_GROUP.sub(" ", str(value))
+    return re.sub(r"\s+", " ", text).strip()
+
+
+_DATE_FORMATS = ("%d %b %Y", "%d %B %Y", "%d-%b-%Y", "%d/%m/%Y", "%Y-%m-%d", "%d %b %y")
+_ID_MONTHS = {
+    "januari": "january", "februari": "february", "maret": "march", "mei": "may",
+    "juni": "june", "juli": "july", "agustus": "august", "agu": "aug", "agt": "aug",
+    "oktober": "october", "okt": "oct", "desember": "december", "des": "dec",
+}
+
+
+def parse_comdev_date(value):
+    if isinstance(value, datetime):
+        return value.strftime("%Y-%m-%d")
+    if isinstance(value, date):
+        return value.strftime("%Y-%m-%d")
+    text = re.sub(r"\s+", " ", str(value)).strip()
+    words = [_ID_MONTHS.get(w.lower(), w) for w in text.split(" ")]
+    text2 = " ".join(words)
+    for fmt in _DATE_FORMATS:
+        try:
+            return datetime.strptime(text2, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    return text
+
+
+def parse_comdev_header(header_value, row7_value):
+    raw = str(header_value)
+    groups = _PAREN_GROUP.findall(raw)
+    village, paren_date = "", ""
+    if groups:
+        inner = groups[-1][1:-1].strip()
+        if " - " in inner:
+            village, paren_date = [x.strip() for x in inner.split(" - ", 1)]
+        else:
+            village = inner
+    title = clean_comdev_title(raw)
+    date_value = parse_comdev_date(row7_value) if not _is_blank_cell(row7_value) else parse_comdev_date(paren_date) if paren_date else ""
+    return title, village, date_value
+
+
+def _abbr_title(title):
+    words = [w for w in re.findall(r"[A-Za-z]+", title)]
+    return "".join(w[0].upper() for w in words)[:8] or "KEG"
+
+
+def _abbr_village(village):
+    words = re.findall(r"[A-Za-z]+", village)
+    if not words:
+        return "XXX"
+    if len(words) == 1:
+        return words[0][:3].upper()
+    return "".join(w[0].upper() for w in words)[:4]
+
+
+def build_comdev_code(title, village, date_value, used):
+    digits = re.sub(r"\D", "", date_value) if re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_value) else "0000"
+    code = f"{_abbr_title(title)}-{_abbr_village(village)}-{digits}"
+    base, n = code, 1
+    while code in used:
+        n += 1
+        code = f"{base}-{n}"
+    used.add(code)
+    return code
+
+
+def comdev_extra_header_ok(header_value, row7_value):
+    if _is_blank_cell(header_value) or _is_blank_cell(row7_value):
+        return False
+    if _is_numeric_only(header_value):
+        return False
+    if _is_month_only(header_value):
+        return False
+    if _has_total_peserta(header_value):
+        return False
+    return True
+
+
+def process_comdev_sheet2(source_workbook, target_spreadsheet):
+    sheet_name = "ComDev"
+    if sheet_name not in source_workbook.sheetnames:
+        raise ValueError(
+            f"Sheet '{sheet_name}' tidak ditemukan. "
+            f"Sheet yang tersedia: {source_workbook.sheetnames}"
+        )
+
+    raw_data = read_sheet_rows(source_workbook[sheet_name])
+    b, i = col_to_index("B"), col_to_index("I")
+    n, u = col_to_index("N"), col_to_index("U")
+    extra_start = col_to_index(COMDEV_EXTRA_START_COL)
+
+    if len(raw_data) < 6:
+        raise ValueError(f"Sheet '{sheet_name}' tidak punya baris header ke-6.")
+
+    header_src = raw_data[5]
+    row7_src = raw_data[6] if len(raw_data) >= 7 else []
+    width = max(len(r) for r in raw_data)
+    extra_idx = [
+        c for c in range(extra_start, width)
+        if comdev_extra_header_ok(safe_get(header_src, c), safe_get(row7_src, c))
+        and clean_comdev_title(safe_get(header_src, c))
+    ]
+
+    def pick(row):
+        row = list(row) + [None] * (max(u, width - 1) + 1 - len(row))
+        return row[b:i + 1] + row[n:u + 1] + [row[c] for c in extra_idx]
+
+    header = pick(header_src)
+    base_len = len(header) - len(extra_idx)
+    used = set()
+    activities = []
+    codes = []
+    for c in extra_idx:
+        title, village, date_value = parse_comdev_header(safe_get(header_src, c), safe_get(row7_src, c))
+        code = build_comdev_code(title, village, date_value, used)
+        codes.append(code)
+        activities.append([code, title, village, date_value])
+
+    header = header[:base_len] + codes
+    data = [header] + [pick(r) for r in raw_data[8:]]
+    if len(data) < 2:
+        raise ValueError(f"Sheet '{sheet_name}' tidak punya data mulai baris 9.")
+
+    write_to_sheet(target_spreadsheet, COMDEV_SHEET2_NAME, clean_rows(data))
+
+    activity_rows = [["ID_Kode", "Judul_Kegiatan", "Desa", "Tanggal"]] + activities
+    write_to_sheet(target_spreadsheet, COMDEV_ACTIVITY_SHEET_NAME, clean_rows(activity_rows))
+
+
 def process_nursery_stock(source_workbook, target_spreadsheet):
     sheet_name = "Nursery Stock"
     if sheet_name not in source_workbook.sheetnames:
@@ -556,6 +755,7 @@ def main():
         comdev_spreadsheet = run_step("Buka spreadsheet ComDev", errors, lambda: gc.open_by_key(COMDEV_SPREADSHEET_ID))
         if comdev_spreadsheet:
             run_step("process_comdev", errors, lambda: process_comdev(comdev_wb, comdev_spreadsheet))
+            run_step("process_comdev_sheet2", errors, lambda: process_comdev_sheet2(comdev_wb, comdev_spreadsheet))
 
     nursery_wb = run_step(
         "Download New Nursery Database", errors,
