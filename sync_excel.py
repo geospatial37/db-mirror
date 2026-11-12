@@ -506,18 +506,37 @@ def parse_comdev_date(value):
     return text
 
 
+def _split_paren_segments(inner):
+    return [seg.strip() for seg in re.split(r";|\s+-\s+", inner) if seg.strip()]
+
+
+def _is_date_segment(segment):
+    tokens = re.findall(r"[A-Za-z]+", segment)
+    if any(t.lower() in MONTH_NAMES for t in tokens):
+        return True
+    if re.search(r"\b(?:19|20)\d{2}\b", segment):
+        return True
+    return re.fullmatch(r"[\d\s/.\-]+", segment) is not None
+
+
 def parse_comdev_header(header_value, row7_value):
     raw = str(header_value)
-    groups = _PAREN_GROUP.findall(raw)
-    village, paren_date = "", ""
-    if groups:
-        inner = groups[-1][1:-1].strip()
-        if " - " in inner:
-            village, paren_date = [x.strip() for x in inner.split(" - ", 1)]
-        else:
-            village = inner
+    village, date_parts = "", []
+    for group in _PAREN_GROUP.findall(raw):
+        segments = _split_paren_segments(group[1:-1])
+        if not segments:
+            continue
+        first = segments[0]
+        if not village and not _is_date_segment(first):
+            village = first
+        date_parts.extend(seg for seg in segments if _is_date_segment(seg))
     title = clean_comdev_title(raw)
-    date_value = parse_comdev_date(row7_value) if not _is_blank_cell(row7_value) else parse_comdev_date(paren_date) if paren_date else ""
+    if not _is_blank_cell(row7_value):
+        date_value = parse_comdev_date(row7_value)
+    elif date_parts:
+        date_value = parse_comdev_date(" - ".join(date_parts))
+    else:
+        date_value = ""
     return title, village, date_value
 
 
