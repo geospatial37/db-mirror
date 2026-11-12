@@ -22,4 +22,4 @@ Script otomatis untuk memindahkan data dari file Excel di Dropbox ke Google Spre
 **Versi 1**
 
 Riwayat perubahan:
-- v1: versi awal dokumentasi, mencakup semua sumber di atas.
+- v1 (12 Nov 2026): versi awal dokumentasi, mencakup semua sumber di atas.
