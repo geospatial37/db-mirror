@@ -26,6 +26,7 @@ COMDEV_SPREADSHEET_ID = "1GB64g8bGV_IFjXcpRL7bu4lj9FtgRLKcUXqpNMzg50c"
 NURSERY_SPREADSHEET_ID = "1or3IIjtpas5QD8PRAfO8WdhW6iTc-xH7v0B7hNOAF5M"
 KTH_SPREADSHEET_ID = "1_8jR1z131_-9k3QVbsaGFRn8MY2JPPiEAgWOZliKo_k"
 LOG_MONITORING_SPREADSHEET_ID = "1DRYnz-86Gx7mIzGaeNzUUd9xz_HoxwCgF4W-lLsOYjk"
+PLANTING_NEW_SHEET_NAME = "ARR_SUMMARY"
 PLANTING_NEW_SPREADSHEET_ID = "1CwnGELzoAz98rcVjrCPGoAu2FljK8FYKs3PEMf0OnFU"
 HSE_SPREADSHEET_ID = "1ROa7ApqWNewNiI4wtV3pPHMdTDc02XrTypadPrkbM0s"
 
@@ -202,7 +203,7 @@ def read_sheet_rows(sheet, empty_row_gap=100):
     return [row[:last_col] for row in rows]
 
 
-def process_arr(source_workbook, target_spreadsheet, write_arr_sheet=True):
+def process_arr(source_workbook, target_spreadsheet):
     if "ARR" not in source_workbook.sheetnames:
         return
 
@@ -230,8 +231,7 @@ def process_arr(source_workbook, target_spreadsheet, write_arr_sheet=True):
     if len(data) >= 2:
         del data[1]
 
-    if write_arr_sheet:
-        write_to_sheet(target_spreadsheet, "ARR", clean_rows(data))
+    write_to_sheet(target_spreadsheet, "ARR", clean_rows(data))
 
     asam_e_idx = col_to_index(ARR_ASAM_E_COL[0]) - no_col_index
     asam_p_idx = col_to_index(ARR_ASAM_P_COL[0]) - no_col_index
@@ -285,6 +285,41 @@ def process_arr(source_workbook, target_spreadsheet, write_arr_sheet=True):
         summary.append(clean_rows([summary_row])[0])
 
     write_to_sheet(target_spreadsheet, "ARR_SUMMARY", summary, ARR_SUMMARY_DATE_COLS)
+
+
+def process_planting_new(source_workbook, target_spreadsheet):
+    sheet_name = "ARR"
+    if sheet_name not in source_workbook.sheetnames:
+        raise ValueError(
+            f"Sheet '{sheet_name}' tidak ditemukan. "
+            f"Sheet yang tersedia: {source_workbook.sheetnames}"
+        )
+
+    raw_data = read_sheet_rows(source_workbook[sheet_name])
+    if len(raw_data) < 8:
+        raise ValueError(f"Sheet '{sheet_name}' tidak punya data mulai baris 8.")
+
+    start, end = col_to_index("B"), col_to_index("EH")
+    width = end - start + 1
+
+    def pick(row):
+        row = list(row) + [None] * (end + 1 - len(row))
+        out = []
+        for v in row[start:end + 1]:
+            if isinstance(v, datetime) and v.time() == time(0, 0):
+                v = v.date()
+            if v == "#REF!":
+                v = ""
+            out.append(v)
+        return out
+
+    header = pick(raw_data[5])
+    rows = [pick(r) for r in raw_data[7:]]
+    rows = [r for r in rows if not _is_blank_row(r)]
+    if not rows:
+        raise ValueError(f"Sheet '{sheet_name}' tidak punya data mulai baris 8.")
+
+    write_to_sheet(target_spreadsheet, PLANTING_NEW_SHEET_NAME, clean_rows([header] + rows))
 
 
 def process_target_capaian(source_workbook, target_spreadsheet):
@@ -751,7 +786,7 @@ def main():
     if planting_new_wb:
         planting_new_spreadsheet = run_step("Buka spreadsheet Planting Baru", errors, lambda: gc.open_by_key(PLANTING_NEW_SPREADSHEET_ID))
         if planting_new_spreadsheet:
-            run_step("process_arr_summary_baru", errors, lambda: process_arr(planting_new_wb, planting_new_spreadsheet, write_arr_sheet=False))
+            run_step("process_planting_new", errors, lambda: process_planting_new(planting_new_wb, planting_new_spreadsheet))
 
     followup_wb = run_step(
         "Download Potential-Farmer-for-ARR", errors,
