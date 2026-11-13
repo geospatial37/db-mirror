@@ -773,6 +773,7 @@ def main():
     creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
     gc = gspread.authorize(creds)
     target_spreadsheet = gc.open_by_key(TARGET_SPREADSHEET_ID)
+    planting_new_spreadsheet = run_step("Buka spreadsheet Planting Baru", errors, lambda: gc.open_by_key(PLANTING_NEW_SPREADSHEET_ID))
 
     planting_wb = run_step(
         "Download Database-for-Planting", errors,
@@ -780,8 +781,9 @@ def main():
     )
     if planting_wb:
         run_step("process_arr", errors, lambda: process_arr(planting_wb, target_spreadsheet))
-        run_step("process_target_capaian", errors, lambda: process_target_capaian(planting_wb, target_spreadsheet))
-        run_step("process_cumulative_area", errors, lambda: process_cumulative_area(planting_wb, target_spreadsheet))
+        if planting_new_spreadsheet:
+            run_step("process_target_capaian", errors, lambda: process_target_capaian(planting_wb, planting_new_spreadsheet))
+            run_step("process_cumulative_area", errors, lambda: process_cumulative_area(planting_wb, planting_new_spreadsheet))
 
         log_monitoring_spreadsheet = run_step("Buka spreadsheet Log Monitoring", errors, lambda: gc.open_by_key(LOG_MONITORING_SPREADSHEET_ID))
         if log_monitoring_spreadsheet:
@@ -795,17 +797,15 @@ def main():
         "Download Database-for-Planting (baru)", errors,
         lambda: download_workbook(DROPBOX_URL_PLANTING_NEW, "Database-for-Planting (baru)"),
     )
-    if planting_new_wb:
-        planting_new_spreadsheet = run_step("Buka spreadsheet Planting Baru", errors, lambda: gc.open_by_key(PLANTING_NEW_SPREADSHEET_ID))
-        if planting_new_spreadsheet:
-            run_step("process_planting_new", errors, lambda: process_planting_new(planting_new_wb, planting_new_spreadsheet))
+    if planting_new_wb and planting_new_spreadsheet:
+        run_step("process_planting_new", errors, lambda: process_planting_new(planting_new_wb, planting_new_spreadsheet))
 
     followup_wb = run_step(
         "Download Potential-Farmer-for-ARR", errors,
         lambda: download_workbook(DROPBOX_URL_FOLLOWUP, "Potential-Farmer-for-ARR"),
     )
-    if followup_wb:
-        run_step("process_follow_up_petani", errors, lambda: process_follow_up_petani(followup_wb, target_spreadsheet))
+    if followup_wb and planting_new_spreadsheet:
+        run_step("process_follow_up_petani", errors, lambda: process_follow_up_petani(followup_wb, planting_new_spreadsheet))
 
     ct_compile_wb = run_step(
         "Download CT Compile", errors,
