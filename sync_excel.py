@@ -16,6 +16,7 @@ DROPBOX_URL_CT_COMPILE = "https://www.dropbox.com/scl/fi/bg82woa41npj9sfc6l58h/C
 DROPBOX_URL_BT_COMPILE = "https://www.dropbox.com/scl/fi/5au2sa502w64h32in2azi/BT-Compile.xlsx?rlkey=8do0u62sevgy3vcovrvd4ptox&dl=1"
 DROPBOX_URL_COMDEV = "https://www.dropbox.com/scl/fi/bkkqvxk9nnqkxr84qry5f/ComDev-Database_Update_20260818.xlsx?rlkey=t5691lpd5x0pax5bazvf9n8st&dl=1"
 DROPBOX_URL_NURSERY = "https://www.dropbox.com/scl/fi/4wo13modlf34h2fdmpeus/New-Nursery-Database_.xlsx?rlkey=lgj3j98jq6fbnlq3bn1h6g5et&dl=1"
+DROPBOX_URL_PLANTING_NEW = "https://www.dropbox.com/scl/fi/yw173h2zgnm6h3965i2ra/Database-for-Planting.xlsx?rlkey=9tfv2u3u2f12w641iauyoqc6w&dl=1"
 DROPBOX_URL_HSE = "https://www.dropbox.com/scl/fi/g4gxslp755l98nxo5d5av/Dashboard-HSE-Final.xlsx?rlkey=4c1xl96yor90724jswlcsg3v1&dl=1"
 
 TARGET_SPREADSHEET_ID = "1-LHCIUy1iD154WczY4Da_-iRaILtvL0mOW4gRW6YQac"
@@ -25,6 +26,7 @@ COMDEV_SPREADSHEET_ID = "1GB64g8bGV_IFjXcpRL7bu4lj9FtgRLKcUXqpNMzg50c"
 NURSERY_SPREADSHEET_ID = "1or3IIjtpas5QD8PRAfO8WdhW6iTc-xH7v0B7hNOAF5M"
 KTH_SPREADSHEET_ID = "1_8jR1z131_-9k3QVbsaGFRn8MY2JPPiEAgWOZliKo_k"
 LOG_MONITORING_SPREADSHEET_ID = "1DRYnz-86Gx7mIzGaeNzUUd9xz_HoxwCgF4W-lLsOYjk"
+PLANTING_NEW_SPREADSHEET_ID = "1CwnGELzoAz98rcVjrCPGoAu2FljK8FYKs3PEMf0OnFU"
 HSE_SPREADSHEET_ID = "1ROa7ApqWNewNiI4wtV3pPHMdTDc02XrTypadPrkbM0s"
 
 SUMMARY_HEADER = [
@@ -200,7 +202,7 @@ def read_sheet_rows(sheet, empty_row_gap=100):
     return [row[:last_col] for row in rows]
 
 
-def process_arr(source_workbook, target_spreadsheet):
+def process_arr(source_workbook, target_spreadsheet, write_arr_sheet=True):
     if "ARR" not in source_workbook.sheetnames:
         return
 
@@ -228,7 +230,8 @@ def process_arr(source_workbook, target_spreadsheet):
     if len(data) >= 2:
         del data[1]
 
-    write_to_sheet(target_spreadsheet, "ARR", clean_rows(data))
+    if write_arr_sheet:
+        write_to_sheet(target_spreadsheet, "ARR", clean_rows(data))
 
     asam_e_idx = col_to_index(ARR_ASAM_E_COL[0]) - no_col_index
     asam_p_idx = col_to_index(ARR_ASAM_P_COL[0]) - no_col_index
@@ -740,6 +743,15 @@ def main():
         kth_spreadsheet = run_step("Buka spreadsheet KTH", errors, lambda: gc.open_by_key(KTH_SPREADSHEET_ID))
         if kth_spreadsheet:
             run_step("process_kth", errors, lambda: process_kth(planting_wb, kth_spreadsheet))
+
+    planting_new_wb = run_step(
+        "Download Database-for-Planting (baru)", errors,
+        lambda: download_workbook(DROPBOX_URL_PLANTING_NEW, "Database-for-Planting (baru)"),
+    )
+    if planting_new_wb:
+        planting_new_spreadsheet = run_step("Buka spreadsheet Planting Baru", errors, lambda: gc.open_by_key(PLANTING_NEW_SPREADSHEET_ID))
+        if planting_new_spreadsheet:
+            run_step("process_arr_summary_baru", errors, lambda: process_arr(planting_new_wb, planting_new_spreadsheet, write_arr_sheet=False))
 
     followup_wb = run_step(
         "Download Potential-Farmer-for-ARR", errors,
