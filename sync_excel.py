@@ -10,7 +10,7 @@ from datetime import datetime, date, time
 from decimal import Decimal
 from google.oauth2.service_account import Credentials
 
-DROPBOX_URL_PLANTING = "https://www.dropbox.com/scl/fi/yw173h2zgnm6h3965i2ra/Database-for-Planting.xlsx?rlkey=9tfv2u3u2f12w641iauyoqc6w&dl=1"
+DROPBOX_URL_PLANTING = "https://www.dropbox.com/scl/fi/en98shfi3xvkbn8slaa5w/Database-for-Planting-Copy.xlsx?rlkey=1hncx3evuuz30haccwc9ph1wf&dl=1"
 DROPBOX_URL_FOLLOWUP = "https://www.dropbox.com/scl/fi/av13w2gl8etjfs6ai6e0i/Potential-Farmer-for-ARR.xlsx?rlkey=qeg53qzba72yguf2nt2d2ek1t&dl=1"
 DROPBOX_URL_CT_COMPILE = "https://www.dropbox.com/scl/fi/bg82woa41npj9sfc6l58h/CT-Compile.xlsx?rlkey=yu29wz7rjpgvzh7vttahexc0n&dl=1"
 DROPBOX_URL_BT_COMPILE = "https://www.dropbox.com/scl/fi/5au2sa502w64h32in2azi/BT-Compile.xlsx?rlkey=8do0u62sevgy3vcovrvd4ptox&dl=1"
