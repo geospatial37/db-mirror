@@ -25,7 +25,7 @@ COMDEV_SPREADSHEET_ID = "1GB64g8bGV_IFjXcpRL7bu4lj9FtgRLKcUXqpNMzg50c"
 NURSERY_SPREADSHEET_ID = "1or3IIjtpas5QD8PRAfO8WdhW6iTc-xH7v0B7hNOAF5M"
 KTH_SPREADSHEET_ID = "1_8jR1z131_-9k3QVbsaGFRn8MY2JPPiEAgWOZliKo_k"
 LOG_MONITORING_SPREADSHEET_ID = "1DRYnz-86Gx7mIzGaeNzUUd9xz_HoxwCgF4W-lLsOYjk"
-PLANTING_NEW_SHEET_NAME = "ARR_SUMMARY"
+PLANTING_NEW_SHEET_NAME = "ARR"
 PLANTING_NEW_SPREADSHEET_ID = "1CwnGELzoAz98rcVjrCPGoAu2FljK8FYKs3PEMf0OnFU"
 HSE_SPREADSHEET_ID = "1ROa7ApqWNewNiI4wtV3pPHMdTDc02XrTypadPrkbM0s"
 
@@ -119,7 +119,9 @@ def write_to_sheet(target_spreadsheet, sheet_name, data, date_cols=None):
     try:
         sheet = call_with_retry(target_spreadsheet.worksheet, sheet_name)
     except gspread.exceptions.WorksheetNotFound:
-        sheet = call_with_retry(target_spreadsheet.add_worksheet, title=sheet_name, rows=100, cols=20)
+        new_rows = max(len(data), 1)
+        new_cols = max(max((len(row) for row in data), default=1), 1)
+        sheet = call_with_retry(target_spreadsheet.add_worksheet, title=sheet_name, rows=new_rows, cols=new_cols)
 
     call_with_retry(sheet.clear)
     if data:
@@ -251,21 +253,6 @@ def process_target_capaian(source_workbook, target_spreadsheet):
             row[0] = TARGET_CAPAIAN_MAPPING[uraian]
 
     write_to_sheet(target_spreadsheet, "TARGET_CAPAIAN", clean_rows(data))
-
-
-def process_cumulative_area(source_workbook, target_spreadsheet):
-    sheet_name = "Cumulative Area"
-    if sheet_name not in source_workbook.sheetnames:
-        raise ValueError(
-            f"Sheet '{sheet_name}' tidak ditemukan. "
-            f"Sheet yang tersedia: {source_workbook.sheetnames}"
-        )
-
-    raw_data = read_sheet_rows(source_workbook[sheet_name])
-
-    data = [row[1:] for row in raw_data[3:]]
-
-    write_to_sheet(target_spreadsheet, "Planting Cumulative Area", clean_rows(data))
 
 
 def process_log_monitoring(source_workbook, target_spreadsheet):
@@ -690,7 +677,6 @@ def main():
         if planting_new_spreadsheet:
             run_step("process_planting_new", errors, lambda: process_planting_new(planting_wb, planting_new_spreadsheet))
             run_step("process_target_capaian", errors, lambda: process_target_capaian(planting_wb, planting_new_spreadsheet))
-            run_step("process_cumulative_area", errors, lambda: process_cumulative_area(planting_wb, planting_new_spreadsheet))
 
         log_monitoring_spreadsheet = run_step("Buka spreadsheet Log Monitoring", errors, lambda: gc.open_by_key(LOG_MONITORING_SPREADSHEET_ID))
         if log_monitoring_spreadsheet:
