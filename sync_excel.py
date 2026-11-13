@@ -8,6 +8,7 @@ import openpyxl
 import gspread
 from datetime import datetime, date, time
 from decimal import Decimal
+from openpyxl.utils.datetime import to_excel
 from google.oauth2.service_account import Credentials
 
 DROPBOX_URL_PLANTING = "https://www.dropbox.com/scl/fi/en98shfi3xvkbn8slaa5w/Database-for-Planting-Copy.xlsx?rlkey=1hncx3evuuz30haccwc9ph1wf&dl=1"
@@ -68,9 +69,18 @@ FOLLOW_UP_HEADER = [
 FOLLOW_UP_DATE_COLS = ["T"]
 
 
+def _serial_number(value):
+    number = to_excel(value)
+    if float(number).is_integer():
+        return int(number)
+    return round(float(number), 6)
+
+
 def clean_cell(value):
     if value is None:
         return ""
+    if isinstance(value, (datetime, date)) and not isinstance(value, bool) and value.year < 1950:
+        return _serial_number(value)
     if isinstance(value, datetime):
         return value.strftime("%Y-%m-%d %H:%M:%S")
     if isinstance(value, date):
@@ -306,7 +316,9 @@ def process_planting_new(source_workbook, target_spreadsheet):
         row = list(row) + [None] * (end + 1 - len(row))
         out = []
         for v in row[start:end + 1]:
-            if isinstance(v, datetime) and v.time() == time(0, 0):
+            if isinstance(v, time):
+                v = _serial_number(v)
+            elif isinstance(v, datetime) and v.time() == time(0, 0):
                 v = v.date()
             if v == "#REF!":
                 v = ""
