@@ -148,7 +148,13 @@ def write_to_sheet(target_spreadsheet, sheet_name, data, date_cols=None):
 def download_workbook(url, label):
     response = requests.get(url)
     response.raise_for_status()
-    return openpyxl.load_workbook(io.BytesIO(response.content), data_only=True)
+    workbook = openpyxl.load_workbook(io.BytesIO(response.content), data_only=True)
+    for sheet in workbook.worksheets:
+        title = sheet.title.replace("\xa0", " ").replace("\u2013", "-").replace("\u2014", "-")
+        title = re.sub(r"\s+", " ", title).strip()
+        if title != sheet.title and title not in workbook.sheetnames:
+            sheet.title = title
+    return workbook
 
 
 def _is_blank_cell(value):
