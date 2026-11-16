@@ -529,7 +529,7 @@ def process_comdev_sheet2(source_workbook, target_spreadsheet):
 
     raw_data = read_sheet_rows(source_workbook[sheet_name])
     b, i = col_to_index("B"), col_to_index("I")
-    n, u = col_to_index("N"), col_to_index("U")
+    n, u = col_to_index("O"), col_to_index("V")
     extra_start = col_to_index(COMDEV_EXTRA_START_COL)
 
     if len(raw_data) < 6:
